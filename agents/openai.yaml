@@ -1,0 +1,4 @@
+interface:
+  display_name: "三大项轨迹分析"
+  short_description: "三大项单双机位轨迹分析与四张街机知识卡。"
+  default_prompt: "使用 $analyze-powerlifting-video 分析这些深蹲、卧推或硬拉视频，并生成四张中文街机知识卡。"
