@@ -38,6 +38,8 @@ python3 scripts/validate_pose_tracking.py --pose pose-tracking.json \
 ```bash
 python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
 ```
+
+   双机位的第二页可额外传入 `--secondary-pose-tracking`，且它必须与第二条源视频的 SHA-256 完全一致。后方硬拉/深蹲和脚端卧推中的骨架仍仅用于读者查看模型识别结果，不能超出该机位原本的左右同步判断边界。
 6. Track the visible bar hub consistently. Track the exercise-specific landmarks in the table below. Manually inspect bar tracking drift before interpretation; pose points are not a replacement for bar tracking.
 7. Save JSON using `references/tracking-schema.md`, then run:
 

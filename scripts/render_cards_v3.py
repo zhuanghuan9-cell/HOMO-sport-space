@@ -1128,7 +1128,8 @@ def main():
     parser.add_argument("--frames-dir", type=Path, required=True)
     parser.add_argument("--secondary-tracking", type=Path)
     parser.add_argument("--secondary-frames-dir", type=Path)
-    parser.add_argument("--pose-tracking", type=Path, help="Optional RTMPose JSON shown only as confidence-gated key-frame markers")
+    parser.add_argument("--pose-tracking", type=Path, help="Optional RTMPose JSON shown only as confidence-gated Page-1 key-frame markers")
+    parser.add_argument("--secondary-pose-tracking", type=Path, help="Optional source-bound RTMPose JSON for Page 2 visual markers")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if bool(args.secondary_tracking) != bool(args.secondary_frames_dir):
@@ -1136,6 +1137,7 @@ def main():
     primary = json.loads(args.tracking.read_text(encoding="utf-8"))
     secondary = json.loads(args.secondary_tracking.read_text(encoding="utf-8")) if args.secondary_tracking else None
     pose = json.loads(args.pose_tracking.read_text(encoding="utf-8")) if args.pose_tracking else None
+    secondary_pose = json.loads(args.secondary_pose_tracking.read_text(encoding="utf-8")) if args.secondary_pose_tracking else None
     try:
         primary, primary_frames, secondary, secondary_frames = bind_camera_inputs(
             primary, args.frames_dir, secondary, args.secondary_frames_dir
@@ -1146,6 +1148,14 @@ def main():
             if pose_sha != tracking_sha:
                 raise ValueError("pose tracking source hash does not match Page 1 tracking video")
             primary["_pose_tracking"] = pose
+        if secondary_pose:
+            if secondary is None:
+                raise ValueError("secondary pose tracking requires a secondary video")
+            pose_sha = ((secondary_pose.get("source_video") or {}).get("sha256"))
+            tracking_sha = ((secondary.get("source_video") or {}).get("sha256"))
+            if pose_sha != tracking_sha:
+                raise ValueError("secondary pose tracking source hash does not match Page 2 tracking video")
+            secondary["_pose_tracking"] = secondary_pose
         render(primary, primary_frames, args.output_dir, secondary, secondary_frames)
     except ValueError as error:
         parser.error(str(error))
