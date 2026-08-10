@@ -32,6 +32,12 @@ python3 scripts/validate_pose_tracking.py --pose pose-tracking.json \
 ```
 
    RTMlib obtains official OpenMMLab models on first use and caches them locally; never copy a third-party application's model or commit a model binary. Sample the whole set at 15 fps and existing candidate phases at 30 fps. A joint below 0.60 confidence, outside the frame, occluded for over 0.20 seconds, or missing from enough key phases is unavailable. Do not interpolate, manually patch, or infer a conclusion from it. If the gate is unavailable, retain usable bar analysis but write that the joint-specific item cannot be judged from this camera.
+
+   When the user explicitly wants to see the model's recognition, pass the same source-bound JSON at render time. The cards then show only high-confidence visible joint rings and short links on the matching key screenshots—never a fabricated full-body skeleton and never extra conclusions:
+
+```bash
+python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
+```
 6. Track the visible bar hub consistently. Track the exercise-specific landmarks in the table below. Manually inspect bar tracking drift before interpretation; pose points are not a replacement for bar tracking.
 7. Save JSON using `references/tracking-schema.md`, then run:
 

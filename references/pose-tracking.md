@@ -15,6 +15,16 @@ RTMlib 首次构造轻量级 RTMPose Body 模型时，从 OpenMMLab 官方 URL �
 
 默认全程采样 15 帧/秒，并在已有杠铃 tracking 标出的起始、离地/触胸/底部、推起/上升和锁定附近 ±0.20 秒加密到 30 帧/秒。
 
+## 可选可视化
+
+默认不画骨架。用户明确要求查看模型识别时，可为第 1 页关键帧添加高置信度关节点和连线：
+
+```bash
+python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
+```
+
+渲染器会核对姿态 JSON 与第 1 页视频的 SHA-256；不匹配直接失败。只绘制 `available: true` 的点，遮挡或低置信度关节保留为空，不靠补点把骨架画完整。
+
 ## 可信门禁
 
 - 只保存肩、肘、腕、髋、膝、踝的左右坐标和置信度；`confidence < 0.60` 即为不可用。

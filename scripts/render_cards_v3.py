@@ -336,6 +336,51 @@ def _pin(draw, point, crop, photo_box, label, color, direction=1):
     return {"point": (x, y), "label_box": label_box, "anchor": anchor}
 
 
+POSE_CONNECTIONS = (
+    ("left_shoulder", "left_elbow"), ("left_elbow", "left_wrist"),
+    ("right_shoulder", "right_elbow"), ("right_elbow", "right_wrist"),
+    ("left_shoulder", "left_hip"), ("right_shoulder", "right_hip"),
+    ("left_hip", "left_knee"), ("left_knee", "left_ankle"),
+    ("right_hip", "right_knee"), ("right_knee", "right_ankle"),
+)
+
+
+def _pose_sample(data, time):
+    """Return the closest already confidence-gated pose sample, never a guess."""
+    pose = data.get("_pose_tracking") or {}
+    samples = pose.get("frames") or []
+    candidates = [sample for sample in samples if isinstance(sample.get("time"), (int, float))]
+    if not candidates:
+        return None
+    sample = min(candidates, key=lambda value: abs(float(value["time"]) - float(time)))
+    return sample if abs(float(sample["time"]) - float(time)) <= 1 / 20 else None
+
+
+def _draw_pose_overlay(draw, data, point, crop, photo_box):
+    """Draw only RTMPose's confident, visible joints on a key screenshot."""
+    sample = _pose_sample(data, float(point.get("time", 0)))
+    if sample is None:
+        return
+    joints = sample.get("joints") or {}
+    mapped = {}
+    for name, joint in joints.items():
+        if not isinstance(joint, dict) or not joint.get("available"):
+            continue
+        if not isinstance(joint.get("x"), (int, float)) or not isinstance(joint.get("y"), (int, float)):
+            continue
+        xy = base.map_point(joint, crop, photo_box)
+        if photo_box[0] + 5 <= xy[0] <= photo_box[2] - 5 and photo_box[1] + 5 <= xy[1] <= photo_box[3] - 5:
+            mapped[name] = xy
+    for start, end in POSE_CONNECTIONS:
+        if start in mapped and end in mapped:
+            draw.line((*mapped[start], *mapped[end]), fill="#78E7DD", width=4)
+    for x, y in mapped.values():
+        draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill="#0C1732", outline="#78E7DD", width=3)
+    if mapped:
+        draw.rounded_rectangle((photo_box[0] + 12, photo_box[3] - 38, photo_box[0] + 162, photo_box[3] - 14), radius=6, fill="#0C1732", outline="#78E7DD", width=2)
+        draw.text((photo_box[0] + 20, photo_box[3] - 35), "模型识别：可见关节", font=base.ft(16), fill="#78E7DD")
+
+
 def _bilateral_wrist_evidence(draw, rep, point, crop, photo_box, color):
     """Show the visible left/right wrist height difference without fake numbers."""
     left, right = bilateral_wrists_at(rep, int(point["frame"]))
@@ -454,6 +499,9 @@ def _photo_pair(data, frames_dir, finding, page):
             fit=evidence_fit if page in {1, 2} else "cover",
         )
         contexts.append((crop, inner))
+        # This visual layer is optional and does not create a technique
+        # conclusion.  Low-confidence/occluded joints are absent by design.
+        _draw_pose_overlay(draw, data, point, crop, inner)
         if foot_end_bench:
             _bilateral_wrist_evidence(draw, rep, point, crop, inner, color)
             # A foot-end view must report the reviewed bilateral observation,
@@ -1080,16 +1128,24 @@ def main():
     parser.add_argument("--frames-dir", type=Path, required=True)
     parser.add_argument("--secondary-tracking", type=Path)
     parser.add_argument("--secondary-frames-dir", type=Path)
+    parser.add_argument("--pose-tracking", type=Path, help="Optional RTMPose JSON shown only as confidence-gated key-frame markers")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if bool(args.secondary_tracking) != bool(args.secondary_frames_dir):
         parser.error("--secondary-tracking and --secondary-frames-dir must be supplied together")
     primary = json.loads(args.tracking.read_text(encoding="utf-8"))
     secondary = json.loads(args.secondary_tracking.read_text(encoding="utf-8")) if args.secondary_tracking else None
+    pose = json.loads(args.pose_tracking.read_text(encoding="utf-8")) if args.pose_tracking else None
     try:
         primary, primary_frames, secondary, secondary_frames = bind_camera_inputs(
             primary, args.frames_dir, secondary, args.secondary_frames_dir
         )
+        if pose:
+            pose_sha = ((pose.get("source_video") or {}).get("sha256"))
+            tracking_sha = ((primary.get("source_video") or {}).get("sha256"))
+            if pose_sha != tracking_sha:
+                raise ValueError("pose tracking source hash does not match Page 1 tracking video")
+            primary["_pose_tracking"] = pose
         render(primary, primary_frames, args.output_dir, secondary, secondary_frames)
     except ValueError as error:
         parser.error(str(error))
