@@ -2,6 +2,29 @@
 
 Use one UTF-8 JSON file as the source of truth.
 
+## Optional strict bar-tracking companion file
+
+`bar-tracking.json` is a separate automatic audit file created by
+`scripts/track_barbell.py`. It never overwrites the source tracking. Its
+`bar_tracking.status` is either `available` or `unavailable`; it stores only
+near-side plate hub points that passed circular-candidate, size, continuity,
+and motion gates. It must include the source SHA-256, per-point confidence and
+radius, and rejection reasons when unavailable. Do not interpolate, manually
+correct, reuse an old path, or use colour/text/fixed-coordinate detection.
+
+Only an `available` result may be composed into `bar_path`:
+
+```bash
+python3 scripts/compose_bar_tracking.py --tracking tracking.json \
+  --bar-tracking bar-tracking.json --output report-safe.json
+```
+
+When unavailable, `report-safe.json` uses
+`render.analysis_mode: "bar_path_unavailable"`; it retains screenshots and
+independent evidence but removes bar-path conclusions, path muscle targets,
+and path-derived training. Rear squat/deadlift and foot-end bench use only
+their bilateral endpoint protocol and do not use this companion file.
+
 ## Optional internal RTMPose companion file
 
 `pose-tracking.json` is intentionally a separate file, so an experimental model
@@ -96,7 +119,11 @@ criteria: `references/pose-tracking.md`.
 - `exercise`: `deadlift`, `squat`, or `bench_press`. Missing means legacy `deadlift`.
 - For every newly created dual-camera report, `source_video` is required and is copied from the matched `frame-manifest.json`. `tracking.view` must equal `source_video.detected_view`; a source with confidence below `0.85` is not eligible for paired rendering. Legacy single-camera JSON remains readable, but cannot be used for a new dual-camera render until bound to a manifest.
 - Positive `image_size`, `plate_diameter_px`, and at least one repetition.
-- At least six ordered `bar_path` points per repetition. Each point needs source-frame `frame`, `time`, `x`, `y`.
+- At least six ordered `bar_path` points per repetition when
+  `render.analysis_mode` is not `bar_path_unavailable`. Each point needs
+  source-frame `frame`, `time`, `x`, `y`. A `bar_path_unavailable` report may
+  retain legacy timing points only for selecting screenshots; the renderer must
+  not draw or interpret them.
 - Detailed/last repetition landmarks: deadlift `hip, shoulder`; squat `hip, knee, ankle`; bench `wrist, elbow, shoulder`.
 - A bench foot-end view may additionally store `wrist_screen_left`, `wrist_screen_right`, `elbow_screen_left`, and `elbow_screen_right`. These screen-side names describe the viewer's image, not anatomical left/right.
 - Squat: `reference.midfoot_x` in source pixels.
@@ -112,7 +139,7 @@ criteria: `references/pose-tracking.md`.
 
 ## Optional report data
 
-- `privacy.face_box` and `render.crop` use source-frame `[x1,y1,x2,y2]`. `privacy.face_boxes` may map frame numbers to boxes when the head moves substantially. A confirmed global or per-frame face box is required for public cards when a face is visible; do not guess a fallback region. Set `render.video_photo_fit: "contain"` when Page 1 and/or Page 2 must retain the complete source frame; overlays then map only to the actual contained image area. `page_one_photo_fit` remains a legacy Page-1-only fallback. `render.analysis_mode` is `full` by default; use `bar_path_only` for a side video with no usable joint landmarks, and `symmetry_only` for a front/rear video that only supports left-right evidence.
+- `privacy.face_box` and `render.crop` use source-frame `[x1,y1,x2,y2]`. `privacy.face_boxes` may map frame numbers to boxes when the head moves substantially. A confirmed global or per-frame face box is required for public cards when a face is visible; do not guess a fallback region. Set `render.video_photo_fit: "contain"` when Page 1 and/or Page 2 must retain the complete source frame; overlays then map only to the actual contained image area. `page_one_photo_fit` remains a legacy Page-1-only fallback. `render.analysis_mode` is `full` by default; use `bar_path_only` for a side video with no usable joint landmarks, `symmetry_only` for a front/rear video that only supports left-right evidence, and `bar_path_unavailable` only when a strict companion result has rejected the path.
 - `findings.evidence`: V3's visible Page 1/2 findings. Each item has unique `id`, short `title`, `view` (`view_one` or `view_two`), `page` (1 or 2), and concise `training_target`. It is the only source list that Page 4 may cite. `training_target` is a conservative training focus, not a hidden diagnosis; it becomes the Page-4 `target_label`.
 - `findings.report_status`: use `actionable_issue` (default for legacy data) when at least one displayed finding needs action; its evidence requires `training_target` and Page 4 requires linked drills. Use `stable` only when every analysed camera has no `improve` finding. A stable report requires `primary.no_muscle_direction: true`, forbids `muscle_targets` and all training items, and may omit `training_target`; Page 4 becomes a positive closing card rather than a prescription.
 - `findings.primary`: one `{title, detail}` object; V3 additionally accepts optional `muscle_problem`, `muscle_targets: [{name, role}]`, `capacity_summary`, and `optimization`. `muscle_problem` is the exact Page 3 issue text; `capacity_summary` explains how the named targets relate to it. They are training directions, not a muscle-strength or injury diagnosis. `findings.improve/good/unavailable` are arrays of `{title, detail}`. Legacy `improve/good` remains valid.

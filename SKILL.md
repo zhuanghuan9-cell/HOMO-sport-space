@@ -40,7 +40,16 @@ python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
 ```
 
    双机位的第二页可额外传入 `--secondary-pose-tracking`，且它必须与第二条源视频的 SHA-256 完全一致。后方硬拉/深蹲和脚端卧推中的骨架仍仅用于读者查看模型识别结果，不能超出该机位原本的左右同步判断边界。
-6. Track the visible bar hub consistently. Track the exercise-specific landmarks in the table below. Manually inspect bar tracking drift before interpretation; pose points are not a replacement for bar tracking.
+6. For a side or oblique view, run the strict automatic near-plate hub tracker before interpreting any bar path. It searches circular hub/rim candidates, locks one physical near plate by size and frame-to-frame continuity, and rejects—not fills—missing or ambiguous points. It never uses plate colour, lettering, fixed screen coordinates, manual correction, or interpolation.
+
+```bash
+python3 scripts/track_barbell.py --video source.mp4 --phase-tracking tracking.json \
+  --output bar-tracking.json
+python3 scripts/compose_bar_tracking.py --tracking tracking.json \
+  --bar-tracking bar-tracking.json --output report-safe.json
+```
+
+   Only `bar_tracking.status: "available"` may supply `bar_path`, a bar-path conclusion, a path-related muscle direction, or a path-derived drill. Every key phase must be the same near-side plate hub. If the tracker sees a missing candidate, a plate-size jump, an abnormal frame-to-frame jump, a static/background circle, or ambiguity between plates, it emits `unavailable` with reasons. Render the composed `report-safe.json`; it preserves independent credible observations and pose visualisation, but says `当前视频无法可靠判断杠铃轨迹`, draws no old trace, and removes path-derived advice. Rear squat/deadlift and foot-end bench never run this single-hub tracker: they remain bilateral level/synchrony reviews.
 7. Save JSON using `references/tracking-schema.md`, then run:
 
 ```bash
@@ -54,13 +63,16 @@ python3 scripts/validate_tracking.py --input tracking.json
 ```bash
 python3 scripts/render_cards_v3.py --tracking tracking.json --frames-dir frames --output-dir cards
 
+python3 scripts/render_cards_v3.py --tracking tracking.json --frames-dir frames \
+  --bar-tracking bar-tracking.json --output-dir cards
+
 python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames \
   --secondary-tracking rear.json --secondary-frames-dir rear-frames --output-dir cards
 ```
 
    Both secondary arguments must be present together and both JSON files must describe the same lift. For dual-camera reports, manifests are mandatory: the renderer matches hash rather than argument order and fails before writing cards if a hash, view, confidence, or pair is invalid. Non-standard pairs are rejected rather than silently downgraded.
 11. Render every lift as four dark arcade cards in this fixed order:
-   - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、该机位自己的方向轨迹，以及“看到了什么 → 这意味着什么”。
+   - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、该机位自己的方向轨迹（仅严格杠片追踪可用时），以及“看到了什么 → 这意味着什么”。
    - **机位二：另一个角度看到的问题**：只在双机位时读取第二份 JSON；没有第二机位时改为补拍指导（缺失判断、机位高度、60 帧/秒与拍摄阶段）。稳定表现必须写明“稳定”，不得为了凑内容制造问题。
    - **对应肌群：分别优先加强什么**：正面＋背面像素人偶与索引圆点，说明相关肌群、动作作用与一句优化提示。写“优先加强／相关肌群”，绝不把二维视频写成“某肌肉薄弱”诊断。
    - **一次训练计划**：仅当存在已展示的明确待改善项时，严格显示技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。若所有机位均稳定，设置 `findings.report_status: "stable"`：不得硬塞训练、肌肉强化方向或`针对：`标签；第四关改为“本组保持即可”，以“动作控制稳定，继续保持这套节奏。”收尾。
@@ -95,7 +107,7 @@ For a rear **squat or deadlift** view, never draw a one-point full up/down bar p
 
 ### Deadlift Bar-Path Consistency Gate
 
-For a side or oblique deadlift view, calculate the bar's maximum screen-space horizontal displacement from the lift-off point as a percentage of the visible plate diameter. Above 10%, the report must describe the visible drift in either the primary finding or `其他待改善`, and Page 1 must show the start vertical reference plus the direction of the endpoint offset. Never call that path “稳定／连续／接近垂直” in `做得好` unless manual review first corrects the tracked bar point. Describe it as a 2D screen trend, not a three-dimensional or midfoot diagnosis.
+For a side or oblique deadlift view, calculate the bar's maximum screen-space horizontal displacement from the lift-off point as a percentage of the visible plate diameter **only after strict automatic hub tracking is available**. Above 10%, the report must describe the visible drift in either the primary finding or `其他待改善`, and Page 1 must show the start vertical reference plus the direction of the endpoint offset. Never call that path “稳定／连续／接近垂直” in `做得好`. If strict tracking is unavailable, report no path conclusion at all. Describe an available path only as a 2D screen trend, not a three-dimensional or midfoot diagnosis.
 
 When a visible deadlift drift needs a capability recommendation, use exact, independently indexed anatomy names only: `背阔肌` for keeping the bar close and `竖脊肌群` for isometric trunk positioning. Explain them as training directions, not weakness diagnoses. Page 3 must use matching pink `机位一` indexes, and Page 4 must include one direct path-control drill (default: `绳索直臂下拉｜3组×10–12次｜肘微弯但不屈肘，腋下夹紧，把杠锁在身体旁`).
 

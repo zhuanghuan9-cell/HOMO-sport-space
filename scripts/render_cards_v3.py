@@ -14,6 +14,8 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageOps
 
+from compose_bar_tracking import compose as compose_bar_tracking
+
 _BASE_SPEC = importlib.util.spec_from_file_location("powerlifting_render_base", Path(__file__).with_name("render_cards.py"))
 base = importlib.util.module_from_spec(_BASE_SPEC)
 _BASE_SPEC.loader.exec_module(base)
@@ -162,6 +164,12 @@ def _rep(data):
     return (data.get("repetitions") or [])[0]
 
 
+def bar_path_available(data):
+    """A side-path is drawable only after the strict hub tracker accepts it."""
+    status = ((data.get("bar_tracking") or {}).get("status"))
+    return status != "unavailable"
+
+
 def _view(data):
     # Legacy tracking files predate the explicit view field. Their primary
     # recordings were captured as the default side/oblique review camera.
@@ -199,6 +207,8 @@ def deadlift_path_review(data, rep):
 
 def validate_deadlift_path_reporting(data, finding):
     """Prevent a conspicuous tracked drift from being drawn but left unexplained."""
+    if not bar_path_available(data):
+        return
     if base.exercise_of(data) != "deadlift" or base.normalize_view(_view(data)) not in {"side", "oblique_side"}:
         return
     review = deadlift_path_review(data, _rep(data))
@@ -482,6 +492,7 @@ def _photo_pair(data, frames_dir, finding, page):
     rear_level_evidence = rear_bar_level_evidence(data)
     if rear_level_evidence:
         first, last = rear_level_evidence["reference"], rear_level_evidence["ascent"]
+    path_available = bar_path_available(data)
     if page == 1:
         validate_deadlift_path_reporting(data, finding)
     for index, (point, box) in enumerate(zip((first, last), boxes), 1):
@@ -515,7 +526,7 @@ def _photo_pair(data, frames_dir, finding, page):
         elif hip_timing_deadlift:
             label = point.get("label") or ("起始髋位" if index == 1 else "髋已先上移")
             _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
-        else:
+        elif path_available:
             # Key-frame labels describe the evidence visible in that exact
             # frame.  Fall back to the report title only for older tracking
             # JSON that has no frame-specific annotation.
@@ -523,9 +534,9 @@ def _photo_pair(data, frames_dir, finding, page):
             _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
     # Path remains within the second frame and only represents this view.
     # Rear squat uses paired bar ends instead of a misleading one-point path.
-    if not rear_level_evidence:
+    if not rear_level_evidence and path_available:
         base.arcade_trace(draw, rep["bar_path"], contexts[1][0], contexts[1][1], base.ARCADE_CYAN, base.ARCADE_BLUE, 8)
-    if page == 1 and exercise == "deadlift":
+    if page == 1 and exercise == "deadlift" and path_available:
         _deadlift_drift_callout(draw, data, rep, contexts[1][0], contexts[1][1])
     base.arcade_panel(draw, (FULL_X_BOUNDS[0], 992, FULL_X_BOUNDS[1], 1166), base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
     draw.text((84, 1018), "看到了什么", font=base.ft(32), fill=base.ARCADE_YELLOW)
@@ -959,7 +970,16 @@ def validate_training_links(primary, secondary=None):
 
 
 def _report_status(data):
-    return (((data or {}).get("findings") or {}).get("report_status") or "actionable_issue")
+    findings = ((data or {}).get("findings") or {})
+    explicit = findings.get("report_status")
+    if explicit:
+        return explicit
+    # Legacy rear/foot-end files did not carry report_status.  Their explicit
+    # no-muscle direction is the old representation of a stable camera, and
+    # must not revive an unrelated primary-view prescription.
+    if isinstance(findings.get("primary"), dict) and findings["primary"].get("no_muscle_direction") is True:
+        return "stable"
+    return "actionable_issue"
 
 
 def _report_is_stable(primary, secondary=None):
@@ -1130,6 +1150,7 @@ def main():
     parser.add_argument("--secondary-frames-dir", type=Path)
     parser.add_argument("--pose-tracking", type=Path, help="Optional RTMPose JSON shown only as confidence-gated Page-1 key-frame markers")
     parser.add_argument("--secondary-pose-tracking", type=Path, help="Optional source-bound RTMPose JSON for Page 2 visual markers")
+    parser.add_argument("--bar-tracking", type=Path, help="Strict side/oblique near-plate hub tracking JSON for Page 1")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if bool(args.secondary_tracking) != bool(args.secondary_frames_dir):
@@ -1138,10 +1159,13 @@ def main():
     secondary = json.loads(args.secondary_tracking.read_text(encoding="utf-8")) if args.secondary_tracking else None
     pose = json.loads(args.pose_tracking.read_text(encoding="utf-8")) if args.pose_tracking else None
     secondary_pose = json.loads(args.secondary_pose_tracking.read_text(encoding="utf-8")) if args.secondary_pose_tracking else None
+    bar_tracking = json.loads(args.bar_tracking.read_text(encoding="utf-8")) if args.bar_tracking else None
     try:
         primary, primary_frames, secondary, secondary_frames = bind_camera_inputs(
             primary, args.frames_dir, secondary, args.secondary_frames_dir
         )
+        if bar_tracking:
+            primary = compose_bar_tracking(primary, bar_tracking)
         if pose:
             pose_sha = ((pose.get("source_video") or {}).get("sha256"))
             tracking_sha = ((primary.get("source_video") or {}).get("sha256"))

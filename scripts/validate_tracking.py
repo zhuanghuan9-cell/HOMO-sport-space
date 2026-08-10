@@ -260,25 +260,33 @@ def validate(data: dict) -> list[str]:
         midfoot = (data.get("reference") or {}).get("midfoot_x")
         if not isinstance(midfoot, (int, float)) or not 0 <= midfoot < width:
             errors.append("squat requires reference.midfoot_x inside image")
+    analysis_mode = (data.get("render") or {}).get("analysis_mode", "full")
+    bar_tracking = data.get("bar_tracking") or {}
+    bar_path_unavailable = analysis_mode == "bar_path_unavailable"
+    if bar_path_unavailable:
+        if bar_tracking.get("status") != "unavailable" or not bar_tracking.get("rejection_reasons"):
+            errors.append("bar_path_unavailable requires rejected bar_tracking with a reason")
     for position, repetition in enumerate(repetitions, start=1):
         bar = repetition.get("bar_path") or []
-        if len(bar) < 6:
+        if not bar_path_unavailable and len(bar) < 6:
             errors.append(f"rep {position}: bar_path needs at least 6 points")
-        for name, points in [("bar_path", bar), *landmarks_of(repetition).items()]:
+        point_groups = list(landmarks_of(repetition).items())
+        if not bar_path_unavailable:
+            point_groups.insert(0, ("bar_path", bar))
+        for name, points in point_groups:
             for point in points:
                 if not all(key in point for key in ("frame", "time", "x", "y")):
                     errors.append(f"rep {position}: {name} point missing frame/time/x/y")
                     continue
                 if not (0 <= point["x"] < width and 0 <= point["y"] < height):
                     errors.append(f"rep {position}: {name} point outside image")
-        if exercise == "bench_press":
+        if exercise == "bench_press" and not bar_path_unavailable:
             phases = {point.get("phase") for point in bar}
             for phase in ("start", "touch", "lockout"):
                 if phase not in phases:
                     errors.append(f"rep {position}: bench bar_path needs {phase} phase")
-    analysis_mode = (data.get("render") or {}).get("analysis_mode", "full")
-    if analysis_mode not in {"full", "bar_path_only", "symmetry_only"}:
-        errors.append("render.analysis_mode must be full/bar_path_only/symmetry_only")
+    if analysis_mode not in {"full", "bar_path_only", "symmetry_only", "bar_path_unavailable"}:
+        errors.append("render.analysis_mode must be full/bar_path_only/symmetry_only/bar_path_unavailable")
     if analysis_mode == "full":
         detailed = landmarks_of(repetitions[-1])
         for name in LANDMARKS[exercise]:
@@ -343,6 +351,9 @@ def main() -> int:
     repetitions = data["repetitions"]
     mode = {"deadlift": "vertical_reference", "squat": "midfoot_reference", "bench_press": "j_curve"}[exercise]
     print(f"exercise={exercise} mode={mode} repetitions={len(repetitions)} image_size={data['image_size'][0]}x{data['image_size'][1]}")
+    if (data.get("render") or {}).get("analysis_mode") == "bar_path_unavailable":
+        print("bar_path=unavailable reason=" + "；".join((data.get("bar_tracking") or {}).get("rejection_reasons", [])))
+        return 0
     for repetition in repetitions:
         bar = repetition["bar_path"]
         if exercise == "deadlift":
