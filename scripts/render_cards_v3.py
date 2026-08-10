@@ -393,10 +393,11 @@ def _rear_bar_end_evidence(draw, evidence, crop, photo_box, color, show_arrows=F
     return {"left": (lx, ly), "right": (rx, ry), "label_box": label_box, "anchor": anchor}
 
 
-def _header(draw, page, exercise, title, color, show_summary=True):
+def _header(draw, page, exercise, title, color, show_summary=True, header_title=None):
     left, right = HUD_X_BOUNDS
     base.arcade_panel(draw, HEADER_BOX, color, width=STRUCTURAL_BORDER)
-    draw.text((80, 66), f"{HEADER_ICON}  第{page}关｜{PAGE_TITLES[page]}", font=base.ft(34), fill=base.ARCADE_TEXT)
+    heading = header_title or PAGE_TITLES[page]
+    draw.text((80, 66), f"{HEADER_ICON}  第{page}关｜{heading}", font=base.ft(34), fill=base.ARCADE_TEXT)
     progress_x, y = 82, 124
     for index in range(4):
         fill = color if index < page else "#263758"
@@ -423,7 +424,11 @@ def _photo_pair(data, frames_dir, finding, page):
     exercise = base.exercise_of(data)
     first, last = _key_frames(rep, (data.get("v3") or {}).get("evidence"))
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
-    color = base.ARCADE_PINK if "稳定" not in finding["title"] else base.ARCADE_CYAN
+    # Colour communicates the camera role consistently: the preferred
+    # side/oblique view is pink, while the independent symmetry camera is
+    # cyan.  A non-stable title must not accidentally recolour Page 2 pink.
+    is_secondary_view = base.normalize_view(_view(data)) in {"front", "rear", "foot_end", "head_end"}
+    color = base.ARCADE_CYAN if is_secondary_view else base.ARCADE_PINK
     _header(draw, page, base.exercise_of(data), finding["title"], color)
     boxes = PHOTO_BOXES
     contexts = []
@@ -451,14 +456,23 @@ def _photo_pair(data, frames_dir, finding, page):
         contexts.append((crop, inner))
         if foot_end_bench:
             _bilateral_wrist_evidence(draw, rep, point, crop, inner, color)
-            _pin(draw, point, crop, inner, "画面左端略低" if index == 1 else "两端同步推起", color, 1 if index == 1 else -1)
+            # A foot-end view must report the reviewed bilateral observation,
+            # not a hard-coded asymmetry.  `label` lives on the manually
+            # verified evidence point and keeps a stable pair from being
+            # mislabelled as screen-left low.
+            label = point.get("label") or ("画面左端略低" if index == 1 else "两端同步推起")
+            _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
         elif rear_level_evidence:
             _rear_bar_end_evidence(draw, point, crop, inner, color, show_arrows=index == 2)
         elif hip_timing_deadlift:
             label = point.get("label") or ("起始髋位" if index == 1 else "髋已先上移")
             _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
         else:
-            _pin(draw, point, crop, inner, finding["title"] if index == 1 else "推起回程", color, 1 if index == 1 else -1)
+            # Key-frame labels describe the evidence visible in that exact
+            # frame.  Fall back to the report title only for older tracking
+            # JSON that has no frame-specific annotation.
+            label = point.get("label") or (finding["title"] if index == 1 else "推起回程")
+            _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
     # Path remains within the second frame and only represents this view.
     # Rear squat uses paired bar ends instead of a misleading one-point path.
     if not rear_level_evidence:
@@ -765,7 +779,11 @@ def _deadlift_muscle_annotations(image, target):
 def _muscle_page(primary, secondary=None):
     exercise = base.exercise_of(primary)
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
-    _header(draw, 3, exercise, "", base.ARCADE_PURPLE, show_summary=False)
+    stable_report = _report_is_stable(primary, secondary)
+    _header(
+        draw, 3, exercise, "", base.ARCADE_PURPLE, show_summary=False,
+        header_title="相关肌群｜无需专项强化" if stable_report else None,
+    )
     asset = _anatomy_base(anatomy_asset_for(exercise))
     # Prioritize the scan panel at phone width: it is the visual anchor of
     # this page, so give it materially more space than the explanation cards.
@@ -789,7 +807,7 @@ def _muscle_page(primary, secondary=None):
         legend = "粉色索引＝机位一优先关注的相关能力" if scopes == {(base.ARCADE_PINK,)} else "粉＝机位一｜青＝机位二｜粉＋青＝两机位"
         draw.text((82, 738), legend, font=base.ft(18), fill=base.ARCADE_TEXT)
     else:
-        draw.text((82, 738), "未提供已审核的精确肌肉索引：本页不作定位标注。", font=base.ft(21), fill=base.ARCADE_TEXT)
+        draw.text((82, 738), "本组未发现需要专项强化的可见问题。", font=base.ft(21), fill=base.ARCADE_TEXT)
     findings = [("机位一", _primary(primary))]
     if secondary:
         findings.append(("机位二", _primary(secondary)))
@@ -802,7 +820,9 @@ def _muscle_page(primary, secondary=None):
         base.arcade_panel(draw, (x, y, x + width, y + panel_h), color, width=STRUCTURAL_BORDER)
         draw.text((x + 28, y + 20), label, font=base.ft(31), fill=color)
         muscle_problem = str(finding.get("muscle_problem") or finding["title"])
-        _text(draw, (x + 28, y + 65), f"问题：{muscle_problem}", 28, base.ARCADE_TEXT, width - 56)
+        observation_label = "观察" if finding.get("no_muscle_direction") else "问题"
+        observation_text = str(finding.get("title") or muscle_problem) if finding.get("no_muscle_direction") else muscle_problem
+        _text(draw, (x + 28, y + 65), f"{observation_label}：{observation_text}", 28, base.ARCADE_TEXT, width - 56)
         targets = finding.get("muscle_targets") or []
         names = "、".join(str(item.get("name", "相关肌群")) for item in targets)
         # A compact capability summary can explain several precisely indexed
@@ -849,7 +869,10 @@ def _training_items(primary, secondary=None):
         }
     technical = get(primary_plan, "technical", primary_plan.get("main_drill", defaults["main_drill"]))
     correction = get(primary_plan, "correction", primary_plan.get("assist_drill", defaults["assist_drill"]))
-    assistance = get(second_plan, "assistance", second_plan.get("assist_drill", defaults["assist_drill"]))
+    # A stable secondary view cannot invent a corrective drill.  When the
+    # primary has a real finding, its already-linked assistance is used.
+    assistance_plan = primary_plan if _report_status(secondary) == "stable" else second_plan
+    assistance = get(assistance_plan, "assistance", assistance_plan.get("assist_drill", defaults["assist_drill"]))
     return [
         ("技术主项", technical),
         ("机位一纠正", correction),
@@ -859,6 +882,8 @@ def _training_items(primary, secondary=None):
 
 def validate_training_links(primary, secondary=None):
     """Refuse a final card unless every visible drill cites prior evidence."""
+    if _report_is_stable(primary, secondary):
+        return
     evidence_ids = set()
     evidence_targets = {}
     for data in (primary, secondary):
@@ -885,7 +910,44 @@ def validate_training_links(primary, secondary=None):
             raise ValueError(f"final training card {label} target label does not match source training target")
 
 
+def _report_status(data):
+    return (((data or {}).get("findings") or {}).get("report_status") or "actionable_issue")
+
+
+def _report_is_stable(primary, secondary=None):
+    reports = [primary] + ([secondary] if secondary else [])
+    return all(_report_status(data) == "stable" for data in reports)
+
+
+def _stable_summary(primary, secondary=None):
+    observations = []
+    for data in (primary, secondary):
+        if not data:
+            continue
+        for evidence in ((data.get("findings") or {}).get("evidence") or []):
+            title = str(evidence.get("title") or "").strip()
+            if title:
+                observations.append(title)
+    seen = list(dict.fromkeys(observations))
+    return "；".join(seen) if seen else "当前机位未见明确待改善项。"
+
+
+def _stable_closing_page(primary, secondary=None):
+    image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
+    _header(draw, 4, base.exercise_of(primary), "本组保持即可", base.ARCADE_YELLOW, header_title="本组总结｜稳定结尾")
+    base.arcade_panel(draw, (52, 342, 1028, 610), base.ARCADE_CYAN, width=STRUCTURAL_BORDER)
+    draw.text((84, 374), "本次总评", font=base.ft(38), fill=base.ARCADE_CYAN)
+    _text(draw, (84, 440), _stable_summary(primary, secondary), 34, base.ARCADE_TEXT, 880)
+    _text(draw, (84, 526), "没有新增纠正训练；继续按照原有训练安排推进即可。", 26, base.ARCADE_MUTED, 880)
+    base.arcade_panel(draw, (52, 634, 1028, 874), base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
+    draw.text((84, 668), "报告结尾", font=base.ft(38), fill=base.ARCADE_YELLOW)
+    _text(draw, (84, 748), "动作控制稳定，继续保持这套节奏。", 42, base.ARCADE_TEXT, 880)
+    return image
+
+
 def _training_page(primary, secondary=None):
+    if _report_is_stable(primary, secondary):
+        return _stable_closing_page(primary, secondary)
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
     _header(draw, 4, base.exercise_of(primary), "下一次训练，只做这三项", base.ARCADE_YELLOW)
     for i, (label, item) in enumerate(_training_items(primary, secondary)):

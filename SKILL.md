@@ -45,7 +45,7 @@ python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames
    - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、该机位自己的方向轨迹，以及“看到了什么 → 这意味着什么”。
    - **机位二：另一个角度看到的问题**：只在双机位时读取第二份 JSON；没有第二机位时改为补拍指导（缺失判断、机位高度、60 帧/秒与拍摄阶段）。稳定表现必须写明“稳定”，不得为了凑内容制造问题。
    - **对应肌群：分别优先加强什么**：正面＋背面像素人偶与索引圆点，说明相关肌群、动作作用与一句优化提示。写“优先加强／相关肌群”，绝不把二维视频写成“某肌肉薄弱”诊断。
-   - **一次训练计划**：严格只有技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。这延续“一个动作口令、一个主练、一个辅助练”的最小可执行原则。
+   - **一次训练计划**：仅当存在已展示的明确待改善项时，严格显示技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。若所有机位均稳定，设置 `findings.report_status: "stable"`：不得硬塞训练、肌肉强化方向或`针对：`标签；第四关改为“本组保持即可”，以“动作控制稳定，继续保持这套节奏。”收尾。
 11. Review every card at 1080×1440 and again in the 360×1920 mobile preview. Check face blur, landmark placement, arrow direction, Chinese text, overlap, cropping, and legibility.
 12. Re-read each page as a beginner or recreational lifter: the topic must be clear within three seconds; every line, color, frame, and label must be understandable without another page; the reader must be able to restate what happened, what it means, and what to do next in one sentence. Revise and repeat the review before delivery when any check fails.
 
@@ -84,6 +84,7 @@ Every visible path, timing, or left/right finding in all three lifts must form a
 For V3 Page 4, make this link explicit: every Page 1/2 `findings.evidence` item carries a concise `training_target`; give every `technical`, `correction`, and `assistance` item one or more `source_ids` plus a visible `target_label` composed exactly as `针对：` + its source `training_target` values. The renderer must reject a training item that cannot cite shown evidence or introduces an unsupported target. A stable second view may still contribute a positive observation, but may not create an unrelated corrective drill.
 
 - A capacity direction is optional, not mandatory. If a camera view is stable, say it is stable and set `no_muscle_direction: true`; do not invent a corrective muscle target to fill Page 3.
+- 当所有机位均稳定时，`findings.report_status` 必须为 `stable`。稳定报告可以保留正向视频证据，但不需要 `training_target`，`plan` 不得包含技术主项、纠正、辅助、剂量或口令；第 3 页写明“本组未发现需要专项强化的可见问题”，第 4 页只给正向总结与固定专业鼓励语。
 - When a capacity direction is supplied, each `muscle_targets` item must name exactly one anatomical structure. Page 3 must show a same-name, same-scope, same-colour index ring and lead line; Page 4 must contain at least one drill that serves that direction. Reject combined names and broad labels such as `胸肌`、`臀肌`、`前臂`、`上背`、`核心`、`肩胛稳定肌`.
 - **Bench press:** a foot-end left/right bar-height difference is visual coordination evidence only. State the height difference and whether both ends leave the chest; do not diagnose one-side chest weakness. First check grip symmetry and bar centring, then use paused bench work and a forearm/wrist load-control drill where needed.
 - **Squat:** an oblique-view forward screen drift is only a 2D trend, not proof of a three-dimensional midfoot deviation. Explain it through foot pressure, bottom control, and trunk-tension strategy; use the technical squat, pause squat, and slow-eccentric squat progression when those are the chosen directions.

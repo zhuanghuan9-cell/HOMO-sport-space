@@ -9,6 +9,7 @@ from pathlib import Path
 
 EXERCISES = {"deadlift", "squat", "bench_press"}
 CAMERA_VIEWS = {"side", "oblique_side", "front", "rear", "foot_end", "head_end"}
+REPORT_STATUSES = {"stable", "actionable_issue"}
 LANDMARKS = {
     "deadlift": ("hip", "shoulder"),
     "squat": ("hip", "knee", "ankle"),
@@ -96,6 +97,9 @@ def validate_report_model(data: dict) -> list[str]:
         if not isinstance(findings, dict):
             errors.append("findings must be an object")
         else:
+            report_status = findings.get("report_status", "actionable_issue")
+            if report_status not in REPORT_STATUSES:
+                errors.append("findings.report_status must be stable or actionable_issue")
             evidence = findings.get("evidence")
             if evidence is not None:
                 if not isinstance(evidence, list) or not evidence:
@@ -106,7 +110,7 @@ def validate_report_model(data: dict) -> list[str]:
                         if not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key].strip() for key in ("id", "title", "view")) or item.get("page") not in {1, 2}:
                             errors.append(f"findings.evidence[{position}] needs id/title/view and page 1 or 2")
                             continue
-                        if not isinstance(item.get("training_target"), str) or not item["training_target"].strip():
+                        if report_status != "stable" and (not isinstance(item.get("training_target"), str) or not item["training_target"].strip()):
                             errors.append(f"findings.evidence[{position}].training_target must be concise non-empty text")
                         ids.append(item["id"].strip())
                     if len(ids) != len(set(ids)):
@@ -114,6 +118,14 @@ def validate_report_model(data: dict) -> list[str]:
             if "primary" in findings and not valid_finding(findings["primary"]):
                 errors.append("findings.primary needs non-empty title/detail")
             primary = findings.get("primary") or {}
+            if report_status == "stable":
+                if not isinstance(primary, dict) or primary.get("no_muscle_direction") is not True:
+                    errors.append("stable report requires findings.primary.no_muscle_direction=true")
+                if isinstance(primary, dict) and primary.get("muscle_targets"):
+                    errors.append("stable report must not supply muscle_targets")
+                improve = findings.get("improve") or []
+                if improve:
+                    errors.append("stable report must not contain findings.improve")
             if isinstance(primary, dict) and "muscle_targets" in primary:
                 targets = primary["muscle_targets"]
                 valid_target = lambda item: isinstance(item, dict) and precise_muscle_name(item.get("name")) and isinstance(item.get("role"), str) and bool(item["role"].strip())
@@ -133,6 +145,9 @@ def validate_report_model(data: dict) -> list[str]:
         if not isinstance(plan, dict):
             errors.append("plan must be an object")
         else:
+            report_status = ((findings or {}).get("report_status") if isinstance(findings, dict) else None) or "actionable_issue"
+            if report_status == "stable" and any(key in plan for key in ("cue", "main_drill", "assist_drill", "technical", "correction", "assistance", "drills")):
+                errors.append("stable report must not contain training drills or cues")
             if "cue" in plan and (not isinstance(plan["cue"], str) or not plan["cue"].strip()):
                 errors.append("plan.cue must be non-empty text")
             for key in ("main_drill", "assist_drill", "technical", "correction", "assistance"):
@@ -146,7 +161,7 @@ def validate_report_model(data: dict) -> list[str]:
             # must cite a visible Page 1/2 finding and provide the short tag
             # that the reader sees on Page 4.
             v3_slots = ("technical", "correction", "assistance")
-            if any(key in plan for key in v3_slots):
+            if report_status != "stable" and any(key in plan for key in v3_slots):
                 evidence_ids = visible_evidence_ids(findings if isinstance(findings, dict) else {})
                 targets = evidence_training_targets(findings if isinstance(findings, dict) else {})
                 if not evidence_ids:
