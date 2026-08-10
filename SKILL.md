@@ -22,16 +22,26 @@ python3 scripts/create_frame_manifest.py --video source.mp4 --frames-dir frames 
    The manifest uses sampled visual evidence to identify `side` / `oblique_side` / `front` / `rear` / `foot_end` / `head_end`, records the source SHA-256 and reports a confidence. At least `0.85` is required for a two-camera report. Below that, stop and request a clearer or standard second angle; never guess. Copy `source_video` from the manifest into the corresponding tracking JSON, and keep `tracking.view` exactly equal to `source_video.detected_view`.
 3. 双机位可选：单机位仍可完成报告；有两个机位时分别追踪，不能用一个机位替另一个机位下结论。标准组合是硬拉侧面/斜侧面＋前/后方、卧推侧面/斜侧面＋脚端、深蹲侧面/斜侧面＋后方。The renderer binds each tracking file to its frames by SHA-256 and orders Page 1/2 by detected view, so swapped CLI arguments cannot swap the evidence.
 4. Extract about 30 fps with `scripts/extract_video_frames.swift`. Segment each repetition and exclude unrelated movement.
-5. Track the visible bar hub consistently. Track the exercise-specific landmarks in the table below. Manually inspect key frames; correct tracking drift before interpretation.
-6. Save JSON using `references/tracking-schema.md`, then run:
+5. Run the independent RTMPose pilot before making any shoulder/hip, hip/knee/ankle, or wrist/elbow/shoulder conclusion. It is internal evidence only: no skeleton is added to cards, no manual point is substituted for a low-confidence point, and it never decides “correct/incorrect” by itself.
+
+```bash
+python3 scripts/track_pose_rtmpose.py --video source.mp4 --exercise squat \
+  --tracking bar-tracking.json --output pose-tracking.json
+python3 scripts/validate_pose_tracking.py --pose pose-tracking.json \
+  --tracking bar-tracking.json --view oblique_side
+```
+
+   RTMlib obtains official OpenMMLab models on first use and caches them locally; never copy a third-party application's model or commit a model binary. Sample the whole set at 15 fps and existing candidate phases at 30 fps. A joint below 0.60 confidence, outside the frame, occluded for over 0.20 seconds, or missing from enough key phases is unavailable. Do not interpolate, manually patch, or infer a conclusion from it. If the gate is unavailable, retain usable bar analysis but write that the joint-specific item cannot be judged from this camera.
+6. Track the visible bar hub consistently. Track the exercise-specific landmarks in the table below. Manually inspect bar tracking drift before interpretation; pose points are not a replacement for bar tracking.
+7. Save JSON using `references/tracking-schema.md`, then run:
 
 ```bash
 python3 scripts/validate_tracking.py --input tracking.json
 ```
 
-7. Read only the matching reference: `references/deadlift.md`, `references/squat.md`, or `references/bench-press.md`.
-8. For every view, record four layers: 可见证据、动作判断、可能原因、改善方向。动作判断必须分为 `主问题`、`其他待改善`、`做得好`、`无法判断`；保留完整的**其他观察**清单，但只把一个主问题放在卡片主标题。不要由一个视觉模式推断某块肌肉一定弱。
-9. For public knowledge cards, set `privacy.face_box` whenever a face is visible. Each view keeps an independent JSON. Render the view-first V3 report with one camera, or combine an optional second view:
+8. Read only the matching reference: `references/deadlift.md`, `references/squat.md`, or `references/bench-press.md`.
+9. For every view, record four layers: 可见证据、动作判断、可能原因、改善方向。动作判断必须分为 `主问题`、`其他待改善`、`做得好`、`无法判断`；保留完整的**其他观察**清单，但只把一个主问题放在卡片主标题。不要由一个视觉模式推断某块肌肉一定弱。
+10. For public knowledge cards, set `privacy.face_box` whenever a face is visible. Each view keeps an independent JSON. Render the view-first V3 report with one camera, or combine an optional second view:
 
 ```bash
 python3 scripts/render_cards_v3.py --tracking tracking.json --frames-dir frames --output-dir cards
@@ -41,13 +51,17 @@ python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames
 ```
 
    Both secondary arguments must be present together and both JSON files must describe the same lift. For dual-camera reports, manifests are mandatory: the renderer matches hash rather than argument order and fails before writing cards if a hash, view, confidence, or pair is invalid. Non-standard pairs are rejected rather than silently downgraded.
-10. Render every lift as four dark arcade cards in this fixed order:
+11. Render every lift as four dark arcade cards in this fixed order:
    - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、该机位自己的方向轨迹，以及“看到了什么 → 这意味着什么”。
    - **机位二：另一个角度看到的问题**：只在双机位时读取第二份 JSON；没有第二机位时改为补拍指导（缺失判断、机位高度、60 帧/秒与拍摄阶段）。稳定表现必须写明“稳定”，不得为了凑内容制造问题。
    - **对应肌群：分别优先加强什么**：正面＋背面像素人偶与索引圆点，说明相关肌群、动作作用与一句优化提示。写“优先加强／相关肌群”，绝不把二维视频写成“某肌肉薄弱”诊断。
    - **一次训练计划**：仅当存在已展示的明确待改善项时，严格显示技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。若所有机位均稳定，设置 `findings.report_status: "stable"`：不得硬塞训练、肌肉强化方向或`针对：`标签；第四关改为“本组保持即可”，以“动作控制稳定，继续保持这套节奏。”收尾。
-11. Review every card at 1080×1440 and again in the 360×1920 mobile preview. Check face blur, landmark placement, arrow direction, Chinese text, overlap, cropping, and legibility.
-12. Re-read each page as a beginner or recreational lifter: the topic must be clear within three seconds; every line, color, frame, and label must be understandable without another page; the reader must be able to restate what happened, what it means, and what to do next in one sentence. Revise and repeat the review before delivery when any check fails.
+12. Review every card at 1080×1440 and again in the 360×1920 mobile preview. Check face blur, landmark placement, arrow direction, Chinese text, overlap, cropping, and legibility.
+13. Re-read each page as a beginner or recreational lifter: the topic must be clear within three seconds; every line, color, frame, and label must be understandable without another page; the reader must be able to restate what happened, what it means, and what to do next in one sentence. Revise and repeat the review before delivery when any check fails.
+
+### RTMPose rollout gate
+
+Keep `pose-tracking.json` separate from the card tracking JSON until its standard camera class passes the automated benchmark. For each of the six baseline classes—hardlift side/rear, squat side/rear, bench side/foot-end—record independently reviewed joint points and run `scripts/benchmark_pose_tracking.py`. It must meet median error ≤24px, 90th-percentile error ≤40px, and key-point availability ≥90%. Rear squat/deadlift and foot-end bench are intentionally excluded from joint-timing conclusions even when pose points exist: they remain bar-level/synchrony views. Only a passing, permitted view may inform a human-joint conclusion; it must still agree with the bar evidence and the 2D camera boundary. See `references/pose-tracking.md`.
 
 ### Complete-source Video Frames
 

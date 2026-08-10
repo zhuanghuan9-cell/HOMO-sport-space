@@ -2,6 +2,25 @@
 
 Use one UTF-8 JSON file as the source of truth.
 
+## Optional internal RTMPose companion file
+
+`pose-tracking.json` is intentionally a separate file, so an experimental model
+cannot silently overwrite manually reviewed bar tracking or alter a card. Create
+it with `scripts/track_pose_rtmpose.py`; its schema records source SHA-256,
+official-model cache hashes, 15/30 fps sampling, and raw confidence-gated joint
+points. Validate it against the associated card tracking before using it:
+
+```bash
+python3 scripts/validate_pose_tracking.py --pose pose-tracking.json \
+  --tracking tracking.json --view oblique_side
+```
+
+Only `status: available` may support a joint-timing statement, and even then only
+for a permitted side/oblique view and together with trusted bar evidence. A
+failure means “当前机位无法判断” for that joint-specific finding—not an invitation to
+insert, smooth, or manually guess a point. Full contract and benchmark rollout
+criteria: `references/pose-tracking.md`.
+
 ```json
 {
   "exercise": "squat",

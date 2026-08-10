@@ -9,6 +9,7 @@
 - 按动作与机位分别判断：杠铃路径、起拉/推起时序、触胸/底部稳定及左右端同步。
 - 输出 4 张 `1080×1440` 中文街机知识卡：机位一、机位二、相关肌群、一次训练计划。
 - 所有肌肉索引使用内置像素人体与精确肌腹安全区校验，不使用泛化色块。
+- 可选 RTMPose 内部姿态追踪：官方模型首次下载到本机缓存，以置信度门禁辅助关键帧与时序判断；不在卡片叠加骨架，也不会单独给动作打分。
 
 ## 使用
 
@@ -36,6 +37,8 @@ python3 scripts/create_frame_manifest.py --video side.mp4 --frames-dir side-fram
 ```bash
 python3 scripts/test_camera_binding.py
 python3 scripts/test_camera_view_detection.py
+python3 scripts/test_pose_gates.py
+python3 scripts/test_pose_benchmark.py
 ```
 
 ## License
