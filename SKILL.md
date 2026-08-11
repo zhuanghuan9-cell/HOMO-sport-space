@@ -118,6 +118,39 @@ were not directly scored; Pages 1–3 still never show scores.
 `A` is 80–89 or the ceiling after a clear core issue; `B` 70–79, `C` 60–69,
 and `D` below 60. This is a conservative 2D quality review, not a competition
 judgement, medical assessment, or muscle-strength diagnosis.
+
+### Squat AI score V1
+
+Use source-bound `side`/`oblique_side` plus `rear` videos. Treat them as
+independent representative repetitions: never match phase times across two
+separate recordings. Run strict side bar tracking and RTMPose first, then use:
+
+```bash
+python3 scripts/squat_scoring.py \
+  --side side-report-safe.json --rear rear-tracking.json \
+  --side-pose side-pose-tracking.json --rear-pose rear-pose-tracking.json \
+  --output work/squat-score.json
+```
+
+The side detector records `setup → descent → bottom → ascent → lockout`; it
+adds `pause_bottom` only for a bottom stable for at least 0.4 seconds. Image Y
+increases downwards: descent requires persistent hip-Y increase **and** knee
+flexion; ascent requires persistent hip-Y decrease **and** knee extension.
+Normalise movement by the setup hip–knee distance, reject walking/camera-shift
+sequences before cutting a rep, and never identify a squat from torso lean
+alone. A detected pause, box, or tempo variation is retained as phase data but
+is not scored by the conventional-squat model.
+
+Score only on Page 4 using the same centred two-column HUD as deadlift. The
+internal rules are `SQ-01` 杠铃趋势 20, `SQ-02` 深度与底部控制 15, `SQ-03`
+躯干稳定 20, `SQ-04` 髋膝协同 20, `SQ-05` 左右稳定 15, and `SQ-06` 动作
+流畅度 10. Side bar tracking and rear bilateral endpoint evidence are required.
+A hidden individual pose item receives an 80%-weight `中性基准`, never an
+invented fault, muscle target, or drill. A clearly poor core item (`SQ-01`,
+`SQ-03`, `SQ-04`) cannot receive `SS` or `S`; use the same `SS/S/A/B/C/D`
+mapping as hardlift. Do not use the score as a competition-depth judgement:
+when side hip/knee evidence is unavailable, score bottom/depth neutrally and
+state the 2D limitation.
 12. Review every card at 1080×1440 and again in the 360×1920 mobile preview. Check face blur, landmark placement, arrow direction, Chinese text, overlap, cropping, and legibility.
 13. Re-read each page as a beginner or recreational lifter: the topic must be clear within three seconds; every line, color, frame, and label must be understandable without another page; the reader must be able to restate what happened, what it means, and what to do next in one sentence. Revise and repeat the review before delivery when any check fails.
 

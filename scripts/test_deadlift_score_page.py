@@ -49,6 +49,14 @@ class DeadliftScorePageTests(unittest.TestCase):
         self.assertEqual(image.size, (1080, 1440))
         self.assertIn(score["grade"], {"SS", "S", "A", "B", "C", "D"})
 
+    def test_same_settlement_hud_supports_a_squat_score(self):
+        squat = {"exercise": "squat", "findings": {"report_status": "actionable_issue", "evidence": []}}
+        score = {"scorable": True, "total": 84, "grade": "A", "items": [
+            {"id": "SQ-01", "title": "杠铃趋势", "status": "稳定", "detail": "稳定。"},
+        ]}
+        image = renderer._score_page(squat, None, score)
+        self.assertEqual(image.size, (1080, 1440))
+
     def test_unscorable_page_does_not_need_or_create_drills(self):
         called = []
         original = renderer._score_training_card

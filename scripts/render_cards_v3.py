@@ -20,6 +20,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from compose_bar_tracking import compose as compose_bar_tracking
 from deadlift_scoring import score_deadlift
+from squat_scoring import score_squat
 
 _BASE_SPEC = importlib.util.spec_from_file_location("powerlifting_render_base", Path(__file__).with_name("render_cards.py"))
 base = importlib.util.module_from_spec(_BASE_SPEC)
@@ -1337,23 +1338,27 @@ def _score_training_card(draw, index, label, item):
     _text(draw, (x1 + 580, y1 + 78), f"口令：{item['cue']}", 21, base.ARCADE_TEXT, 350)
 
 
-def _deadlift_unscorable_page(primary, secondary, score):
+def _score_unscorable_page(primary, secondary, score):
+    exercise = base.exercise_of(primary)
+    lift = base.LABELS[exercise]["cn"]
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
-    _header(draw, 4, "deadlift", "当前视频不足以完成完整评分", base.ARCADE_YELLOW, header_title="动作总评｜暂不评分")
+    _header(draw, 4, exercise, "当前视频不足以完成完整评分", base.ARCADE_YELLOW, header_title="动作总评｜暂不评分")
     base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
     draw.text((84, 236), "暂不显示分数或评级", font=base.ft(50), fill=base.ARCADE_TEXT)
     _text(draw, (84, 328), str(score.get("unavailable_reason") or "评分证据不足。"), 32, base.ARCADE_YELLOW, 850)
-    _text(draw, (84, 440), "需要补齐：传统常规单次、侧面＋后方双机位，以及可信的杠铃与姿态关键点。", 27, base.ARCADE_TEXT, 840)
+    _text(draw, (84, 440), f"需要补齐：常规{lift}、侧面＋后方双机位，以及可信的杠铃与姿态关键点。", 27, base.ARCADE_TEXT, 840)
     _text(draw, (84, 548), "本页不生成训练处方，避免把不完整证据变成纠正建议。", 26, base.ARCADE_MUTED, 840)
     return image
 
 
-def _deadlift_score_page(primary, secondary, score):
-    """Fourth-page-only HUD settlement for a scorable conventional deadlift."""
+def _score_page(primary, secondary, score):
+    """Fourth-page-only HUD settlement shared by supported lift scores."""
     if not score.get("scorable"):
-        return _deadlift_unscorable_page(primary, secondary, score)
+        return _score_unscorable_page(primary, secondary, score)
+    exercise = base.exercise_of(primary)
+    lift = base.LABELS[exercise]["cn"]
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
-    _header(draw, 4, "deadlift", "", base.ARCADE_YELLOW, show_summary=False, header_title="动作总评｜这次硬拉表现如何")
+    _header(draw, 4, exercise, "", base.ARCADE_YELLOW, show_summary=False, header_title=f"动作总评｜这次{lift}表现如何")
     base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
     layout = score_settlement_layout()
     _score_decorations(draw, layout["score_center"])
@@ -1384,10 +1389,20 @@ def _deadlift_score_page(primary, secondary, score):
     return image
 
 
+def _deadlift_unscorable_page(primary, secondary, score):
+    """Compatibility wrapper for established score-page tests and callers."""
+    return _score_unscorable_page(primary, secondary, score)
+
+
+def _deadlift_score_page(primary, secondary, score):
+    """Compatibility wrapper for the shared score settlement page."""
+    return _score_page(primary, secondary, score)
+
+
 def _training_page(primary, secondary=None):
-    score = primary.get("_deadlift_score")
-    if base.exercise_of(primary) == "deadlift" and score is not None:
-        return _deadlift_score_page(primary, secondary, score)
+    score = primary.get("_deadlift_score") or primary.get("_squat_score")
+    if base.exercise_of(primary) in {"deadlift", "squat"} and score is not None:
+        return _score_page(primary, secondary, score)
     if _report_is_stable(primary, secondary):
         return _stable_closing_page(primary, secondary)
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
@@ -1422,7 +1437,11 @@ def render(primary, frames_dir, output_dir, secondary=None, secondary_frames_dir
         primary["_deadlift_score"] = score_deadlift(
             primary, secondary, primary.get("_pose_tracking"), secondary.get("_pose_tracking"),
         )
-    score = primary.get("_deadlift_score")
+    if base.exercise_of(primary) == "squat" and secondary:
+        primary["_squat_score"] = score_squat(
+            primary, secondary, primary.get("_pose_tracking"), secondary.get("_pose_tracking"),
+        )
+    score = primary.get("_deadlift_score") or primary.get("_squat_score")
     if not (score and not score.get("scorable")):
         validate_training_links(primary, secondary)
     model = report_mode(primary, secondary)

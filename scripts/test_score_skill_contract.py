@@ -12,6 +12,12 @@ class ScoreSkillContractTests(unittest.TestCase):
         document = SKILL.read_text(encoding="utf-8")
         self.assertIn("双列结算布局", document)
         self.assertIn("总分列与评级列等宽", document)
+
+    def test_squat_phase_and_score_contract_is_documented(self):
+        document = SKILL.read_text(encoding="utf-8")
+        self.assertIn("Squat AI score V1", document)
+        self.assertIn("setup → descent → bottom", document)
+        self.assertIn("80%-weight `中性基准`", document)
         self.assertIn("总分组合（数字＋分）", document)
         self.assertIn("Page 4", document)
 
