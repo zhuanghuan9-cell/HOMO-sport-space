@@ -1042,7 +1042,10 @@ def _muscle_page(primary, secondary=None):
     asset_x = target[0] + (panel_size[0] - asset.width) // 2
     asset_y = target[1] + (panel_size[1] - asset.height) // 2
     image.paste(asset, (asset_x, asset_y), asset)
-    indices = reviewed_anatomy_indices(primary)
+    # A legacy tracking file may still carry old anatomy coordinates.  Stable
+    # reports must not turn those stale annotations into invented training
+    # directions: the visual page explicitly says no targeted strengthening.
+    indices = [] if stable_report else reviewed_anatomy_indices(primary)
     validate_anatomy_coverage(indices, primary, secondary)
     validate_anatomy_layout(indices, target)
     validate_anatomy_locations(indices)

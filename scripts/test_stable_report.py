@@ -63,6 +63,22 @@ class StableReportTests(unittest.TestCase):
         image = renderer._training_page(stable_tracking())
         self.assertEqual(image.size, (1080, 1440))
 
+    def test_stable_report_ignores_legacy_anatomy_indices(self):
+        data = stable_tracking()
+        data["render"]["anatomy_indices"] = [{
+            "number": "①", "muscle": "股四头肌群", "view": "正面", "scope": "view_one",
+            "target": [347, 545], "label": [84, 560],
+        }]
+        calls = []
+        original = renderer._draw_index_label
+        renderer._draw_index_label = lambda *args: calls.append(args)
+        try:
+            image = renderer._muscle_page(data)
+        finally:
+            renderer._draw_index_label = original
+        self.assertEqual(image.size, (1080, 1440))
+        self.assertEqual(calls, [])
+
     def test_mixed_report_keeps_primary_linked_prescription(self):
         primary = stable_tracking()
         primary["findings"]["report_status"] = "actionable_issue"
