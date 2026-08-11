@@ -111,6 +111,9 @@ subscores, raw metrics, or “deduction” wording:
 Only **Page 4** renders the total and one `SS / S / A / B / C / D` badge. If
 neutral baseline was used, Page 4 states that some joints were obscured and
 were not directly scored; Pages 1–3 still never show scores.
+
+**Page 4 双列结算布局：** 总分列与评级列等宽，并排占据评分结算框的上半区。总分组合（数字＋分）必须按实际字形宽度在左列水平、垂直居中，使用不小于 240px 的数字；圆形评级章与其“评级：X”文字在右列各自居中，评级章半径不小于 145px，文字不得压住圆章或下方分隔线。金色仪表弧线围绕左侧总分列绘制。下方的总结与训练建议卡保持文字优先，不与评分区竞争视觉层级。渲染器必须校验两列等宽，并让总分、评级章与评级文字的中心偏差不超过 2px。
+
 `SS` requires 95–100 with no issue; `S` is 90–94 without a clear core issue;
 `A` is 80–89 or the ceiling after a clear core issue; `B` 70–79, `C` 60–69,
 and `D` below 60. This is a conservative 2D quality review, not a competition
