@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 import subprocess
 import tempfile
@@ -50,7 +51,7 @@ ANATOMY_BOX = (52, 176, 1028, 782)
 ANALYSIS_BOX = (52, 806, 1028, 1196)
 TRAINING_BOXES = ((52, 342, 1028, 604), (52, 628, 1028, 890), (52, 914, 1028, 1176))
 SCORE_BOX = (52, 176, 1028, 730)
-SCORE_TRAINING_BOXES = ((52, 790, 1028, 954), (52, 978, 1028, 1142), (52, 1166, 1028, 1330))
+SCORE_TRAINING_BOXES = ((52, 824, 1028, 986), (52, 1010, 1028, 1172), (52, 1196, 1028, 1358))
 # Keep the conclusion band as a structural HUD outline: the grid background
 # remains visible inside it, matching the lightweight framed bars elsewhere.
 SUMMARY_PANEL_FILL = None
@@ -1211,6 +1212,57 @@ def _score_summary(score):
     )
 
 
+def score_settlement_layout():
+    """Public geometry contract for the arcade-style fourth-page settlement."""
+    return {"summary_rows": (550, 610, 666), "training_boxes": SCORE_TRAINING_BOXES}
+
+
+def _settlement_icon(draw, kind, x, y, color):
+    """Small semantic HUD icons: summary / good / improvement, no decoration-only icons."""
+    if kind == "summary":
+        draw.ellipse((x - 18, y - 18, x + 18, y + 18), outline=color, width=4)
+        draw.polygon(((x, y - 12), (x + 4, y - 3), (x + 14, y - 2), (x + 6, y + 5), (x + 8, y + 15), (x, y + 9), (x - 8, y + 15), (x - 6, y + 5), (x - 14, y - 2), (x - 4, y - 3)), fill=color)
+    elif kind == "good":
+        draw.ellipse((x - 18, y - 18, x + 18, y + 18), outline=color, width=4)
+        draw.line((x - 10, y, x - 2, y + 8, x + 12, y - 9), fill=color, width=4)
+    else:
+        draw.polygon(((x, y - 19), (x + 17, y + 14), (x - 17, y + 14)), outline=color, width=4)
+        draw.text((x - 5, y - 9), "!", font=base.ft(23), fill=color)
+
+
+def _score_decorations(draw):
+    """Gold dial and restrained corner marks matching the settlement-panel HUD."""
+    gold = base.ARCADE_YELLOW
+    # The two arc groups read as a dial behind the score rather than a metric.
+    for inset, width, start, end in ((0, 3, 212, 338), (22, 2, 198, 352), (44, 2, 206, 344)):
+        draw.arc((82 + inset, 186 + inset, 594 - inset, 700 - inset), start, end, fill="#7E6720", width=width)
+    for x, y, dx, dy in ((66, 194, 24, 0), (66, 194, 0, 24), (1014, 194, -24, 0), (1014, 194, 0, 24), (66, 712, 24, 0), (66, 712, 0, -24), (1014, 712, -24, 0), (1014, 712, 0, -24)):
+        draw.line((x, y, x + dx, y + dy), fill="#80651C", width=2)
+    for index in range(8):
+        angle = math.radians(212 + index * 16)
+        x = 338 + math.cos(angle) * 232
+        y = 442 + math.sin(angle) * 232
+        draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=gold)
+
+
+def _training_icon(draw, index, center, color):
+    x, y = center
+    if index == 0:  # target / technique focus
+        draw.ellipse((x - 19, y - 19, x + 19, y + 19), outline=color, width=3)
+        draw.ellipse((x - 7, y - 7, x + 7, y + 7), outline=color, width=3)
+        draw.line((x - 28, y, x + 28, y), fill=color, width=3)
+        draw.line((x, y - 28, x, y + 28), fill=color, width=3)
+    elif index == 1:  # pause timing
+        draw.ellipse((x - 19, y - 19, x + 19, y + 19), outline=color, width=3)
+        draw.line((x, y, x, y - 12), fill=color, width=3)
+        draw.line((x, y, x + 10, y + 6), fill=color, width=3)
+        draw.line((x - 7, y - 27, x + 7, y - 27), fill=color, width=3)
+    else:  # lats / path-control assistance
+        draw.arc((x - 20, y - 18, x + 10, y + 22), 275, 105, fill=color, width=4)
+        draw.arc((x - 4, y - 22, x + 23, y + 15), 95, 255, fill=color, width=4)
+        draw.line((x - 3, y + 10, x + 17, y + 10), fill=color, width=4)
+
+
 def _score_badge(draw, center, grade):
     """Yellow arcade grade seal; grades deliberately have no plus/minus."""
     cx, cy = center
@@ -1225,12 +1277,16 @@ def _score_training_card(draw, index, label, item):
     x1, y1, x2, y2 = box
     color = (base.ARCADE_CYAN, base.ARCADE_PINK, base.ARCADE_YELLOW)[index]
     base.arcade_panel(draw, box, color, width=STRUCTURAL_BORDER)
-    draw.text((x1 + 28, y1 + 18), f"{index + 1}｜{label}", font=base.ft(27), fill=color)
-    _text(draw, (x1 + 28, y1 + 55), item["name"], 31, base.ARCADE_TEXT, 510)
-    _text(draw, (x1 + 28, y1 + 101), item["dose"], 24, base.ARCADE_MUTED, 510)
+    cx, cy = x1 + 58, y1 + 48
+    draw.regular_polygon((cx, cy, 31), n_sides=6, rotation=30, outline=color, width=3)
+    draw.text((cx - 8, cy - 15), str(index + 1), font=base.ft(27), fill=color)
+    draw.text((x1 + 122, y1 + 18), label, font=base.ft(28), fill=color)
+    _text(draw, (x1 + 122, y1 + 58), item["name"], 27, base.ARCADE_TEXT, 438)
+    _text(draw, (x1 + 122, y1 + 112), item["dose"], 24, base.ARCADE_MUTED, 438)
     draw.line((x1 + 545, y1 + 24, x1 + 545, y2 - 24), fill="#405070", width=2)
-    _text(draw, (x1 + 580, y1 + 33), item["target_label"], 22, color, 350)
-    _text(draw, (x1 + 580, y1 + 78), f"口令：{item['cue']}", 21, base.ARCADE_TEXT, 350)
+    _training_icon(draw, index, (x1 + 615, y1 + 81), color)
+    _text(draw, (x1 + 705, y1 + 34), item["target_label"], 20, color, 270)
+    _text(draw, (x1 + 705, y1 + 80), f"重点：{item['cue']}", 20, base.ARCADE_TEXT, 270)
 
 
 def _deadlift_unscorable_page(primary, secondary, score):
@@ -1251,6 +1307,7 @@ def _deadlift_score_page(primary, secondary, score):
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
     _header(draw, 4, "deadlift", "", base.ARCADE_YELLOW, show_summary=False, header_title="动作总评｜这次硬拉表现如何")
     base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
+    _score_decorations(draw)
     total, grade = score["total"], score["grade"]
     draw.text((104, 236), str(total), font=base.ft(190), fill=base.ARCADE_YELLOW)
     draw.text((495, 400), "分", font=base.ft(49), fill=base.ARCADE_YELLOW)
@@ -1259,12 +1316,17 @@ def _deadlift_score_page(primary, secondary, score):
     draw.text((738, 490), f"评级：{grade}", font=base.ft(31), fill=base.ARCADE_YELLOW)
     draw.line((82, 526, 998, 526), fill="#59647C", width=2)
     headline, good, improve, neutral = _score_summary(score)
-    _text(draw, (116, 552), headline, 29, base.ARCADE_TEXT, 830)
-    _text(draw, (116, 610), f"做得好：{good}", 25, base.ARCADE_CYAN, 830)
-    _text(draw, (116, 664), f"待改善：{improve}", 24, base.ARCADE_PINK, 830)
+    row_summary, row_good, row_improve = score_settlement_layout()["summary_rows"]
+    _settlement_icon(draw, "summary", 132, row_summary + 4, base.ARCADE_YELLOW)
+    _settlement_icon(draw, "good", 132, row_good + 4, base.ARCADE_CYAN)
+    _settlement_icon(draw, "improve", 132, row_improve + 4, base.ARCADE_PINK)
+    _text(draw, (176, row_summary - 4), headline, 29, base.ARCADE_TEXT, 790)
+    _text(draw, (176, row_good - 4), f"优点：{good}", 25, base.ARCADE_CYAN, 790)
+    _text(draw, (176, row_improve - 4), f"待改善：{improve}", 24, base.ARCADE_PINK, 790)
     if neutral:
         _text(draw, (116, 704), neutral, 18, base.ARCADE_MUTED, 830)
-    draw.text((52, 748), "下一次训练建议", font=base.ft(34), fill=base.ARCADE_YELLOW)
+    draw.rounded_rectangle((52, 756, 380, 810), radius=16, outline=base.ARCADE_YELLOW, width=3)
+    draw.text((72, 766), "下一次训练建议", font=base.ft(31), fill=base.ARCADE_YELLOW)
     if _report_is_stable(primary, secondary):
         # A fully stable scored report never receives filler prescriptions.
         _text(draw, (84, 840), "动作控制稳定，继续保持这套节奏。", 42, base.ARCADE_TEXT, 860)

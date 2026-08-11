@@ -20,6 +20,11 @@ PRIMARY = {
 
 
 class DeadliftScorePageTests(unittest.TestCase):
+    def test_score_settlement_layout_has_reference_style_summary_rows(self):
+        layout = renderer.score_settlement_layout()
+        self.assertEqual(layout["summary_rows"], (550, 610, 666))
+        self.assertEqual(layout["training_boxes"][0], (52, 824, 1028, 986))
+
     def test_scored_settlement_uses_only_allowed_grade_and_full_canvas(self):
         score = {
             "scorable": True, "total": 82, "grade": "A",
