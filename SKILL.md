@@ -76,6 +76,42 @@ python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames
    - **机位二：另一个角度看到的问题**：只在双机位时读取第二份 JSON；没有第二机位时改为补拍指导（缺失判断、机位高度、60 帧/秒与拍摄阶段）。稳定表现必须写明“稳定”，不得为了凑内容制造问题。
    - **对应肌群：分别优先加强什么**：正面＋背面像素人偶与索引圆点，说明相关肌群、动作作用与一句优化提示。写“优先加强／相关肌群”，绝不把二维视频写成“某肌肉薄弱”诊断。
    - **一次训练计划**：仅当存在已展示的明确待改善项时，严格显示技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。若所有机位均稳定，设置 `findings.report_status: "stable"`：不得硬塞训练、肌肉强化方向或`针对：`标签；第四关改为“本组保持即可”，以“动作控制稳定，继续保持这套节奏。”收尾。
+
+### Conventional-deadlift AI score V1
+
+Only a **traditional conventional, reset single deadlift** with a source-bound
+side/oblique-side video **and** rear video is eligible. Run it after strict
+bar and RTMPose tracking, then pass the same verified tracking files to the
+renderer:
+
+```bash
+python3 scripts/deadlift_scoring.py \
+  --side side-report-safe.json --rear rear-tracking.json \
+  --side-pose side-pose-tracking.json --rear-pose rear-pose-tracking.json \
+  --output work/deadlift-score.json
+```
+
+`render.deadlift_variation` must explicitly equal `conventional` and
+`render.deadlift_execution` must explicitly equal `reset_single`; pause,
+deficit, sumo, touch-and-go, unlabelled, or incomplete clips are not scored.
+Every required bar, phase, and pose gate must be available. Otherwise show
+`当前视频不足以完成完整评分`, no number, no grade, and no training prescription.
+
+The internal audit contains six traceable rules; public cards never show their
+subscores, raw metrics, or “deduction” wording:
+
+- `DL-01` 杠铃轨迹 20
+- `DL-02` 躯干稳定 20
+- `DL-03` 髋膝关系 20
+- `DL-04` 左右对称 15
+- `DL-05` 锁定完成度 15
+- `DL-06` 动作流畅度 10
+
+Only **Page 4** renders the total and one `SS / S / A / B / C / D` badge.
+`SS` requires 95–100 with no issue; `S` is 90–94 without a clear core issue;
+`A` is 80–89 or the ceiling after a clear core issue; `B` 70–79, `C` 60–69,
+and `D` below 60. This is a conservative 2D quality review, not a competition
+judgement, medical assessment, or muscle-strength diagnosis.
 12. Review every card at 1080×1440 and again in the 360×1920 mobile preview. Check face blur, landmark placement, arrow direction, Chinese text, overlap, cropping, and legibility.
 13. Re-read each page as a beginner or recreational lifter: the topic must be clear within three seconds; every line, color, frame, and label must be understandable without another page; the reader must be able to restate what happened, what it means, and what to do next in one sentence. Revise and repeat the review before delivery when any check fails.
 

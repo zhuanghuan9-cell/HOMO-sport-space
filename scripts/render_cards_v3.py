@@ -18,6 +18,7 @@ import tempfile
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from compose_bar_tracking import compose as compose_bar_tracking
+from deadlift_scoring import score_deadlift
 
 _BASE_SPEC = importlib.util.spec_from_file_location("powerlifting_render_base", Path(__file__).with_name("render_cards.py"))
 base = importlib.util.module_from_spec(_BASE_SPEC)
@@ -48,6 +49,8 @@ PHOTO_BOXES = ((52, 342, 524, 968), (556, 342, 1028, 968))
 ANATOMY_BOX = (52, 176, 1028, 782)
 ANALYSIS_BOX = (52, 806, 1028, 1196)
 TRAINING_BOXES = ((52, 342, 1028, 604), (52, 628, 1028, 890), (52, 914, 1028, 1176))
+SCORE_BOX = (52, 176, 1028, 730)
+SCORE_TRAINING_BOXES = ((52, 790, 1028, 954), (52, 978, 1028, 1142), (52, 1166, 1028, 1330))
 # Keep the conclusion band as a structural HUD outline: the grid background
 # remains visible inside it, matching the lightweight framed bars elsewhere.
 SUMMARY_PANEL_FILL = None
@@ -1186,7 +1189,90 @@ def _stable_closing_page(primary, secondary=None):
     return image
 
 
+def _score_summary(score):
+    """Turn traceable internal items into the three reader-facing rows."""
+    items = score.get("items") or []
+    good = [item["title"] for item in items if item.get("status") == "稳定"]
+    improve = [item for item in items if item.get("status") != "稳定"]
+    if not improve:
+        return (
+            "六项证据均通过当前二维评分门槛。",
+            "、".join(good[:3]) or "动作控制稳定",
+            "本次未发现需要优先纠正的评分项。",
+        )
+    strongest = next((item for item in improve if item.get("status") == "明显待改善"), improve[0])
+    return (
+        f"主要需要复查：{strongest['title']}。",
+        "、".join(good[:2]) or "已完成的动作环节可保持",
+        "；".join(f"{item['title']}：{item['detail']}" for item in improve[:2]),
+    )
+
+
+def _score_badge(draw, center, grade):
+    """Yellow arcade grade seal; grades deliberately have no plus/minus."""
+    cx, cy = center
+    draw.ellipse((cx - 126, cy - 126, cx + 126, cy + 126), fill="#0A142B", outline=base.ARCADE_YELLOW, width=7)
+    draw.ellipse((cx - 108, cy - 108, cx + 108, cy + 108), outline="#7E6720", width=3)
+    bbox = draw.textbbox((0, 0), grade, font=base.ft(78))
+    draw.text((cx - (bbox[2] - bbox[0]) / 2, cy - 54), grade, font=base.ft(78), fill=base.ARCADE_YELLOW)
+
+
+def _score_training_card(draw, index, label, item):
+    box = SCORE_TRAINING_BOXES[index]
+    x1, y1, x2, y2 = box
+    color = (base.ARCADE_CYAN, base.ARCADE_PINK, base.ARCADE_YELLOW)[index]
+    base.arcade_panel(draw, box, color, width=STRUCTURAL_BORDER)
+    draw.text((x1 + 28, y1 + 18), f"{index + 1}｜{label}", font=base.ft(27), fill=color)
+    _text(draw, (x1 + 28, y1 + 55), item["name"], 31, base.ARCADE_TEXT, 510)
+    _text(draw, (x1 + 28, y1 + 101), item["dose"], 24, base.ARCADE_MUTED, 510)
+    draw.line((x1 + 545, y1 + 24, x1 + 545, y2 - 24), fill="#405070", width=2)
+    _text(draw, (x1 + 580, y1 + 33), item["target_label"], 22, color, 350)
+    _text(draw, (x1 + 580, y1 + 78), f"口令：{item['cue']}", 21, base.ARCADE_TEXT, 350)
+
+
+def _deadlift_unscorable_page(primary, secondary, score):
+    image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
+    _header(draw, 4, "deadlift", "当前视频不足以完成完整评分", base.ARCADE_YELLOW, header_title="动作总评｜暂不评分")
+    base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
+    draw.text((84, 236), "暂不显示分数或评级", font=base.ft(50), fill=base.ARCADE_TEXT)
+    _text(draw, (84, 328), str(score.get("unavailable_reason") or "评分证据不足。"), 32, base.ARCADE_YELLOW, 850)
+    _text(draw, (84, 440), "需要补齐：传统常规单次、侧面＋后方双机位，以及可信的杠铃与姿态关键点。", 27, base.ARCADE_TEXT, 840)
+    _text(draw, (84, 548), "本页不生成训练处方，避免把不完整证据变成纠正建议。", 26, base.ARCADE_MUTED, 840)
+    return image
+
+
+def _deadlift_score_page(primary, secondary, score):
+    """Fourth-page-only HUD settlement for a scorable conventional deadlift."""
+    if not score.get("scorable"):
+        return _deadlift_unscorable_page(primary, secondary, score)
+    image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
+    _header(draw, 4, "deadlift", "", base.ARCADE_YELLOW, show_summary=False, header_title="动作总评｜这次硬拉表现如何")
+    base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
+    total, grade = score["total"], score["grade"]
+    draw.text((104, 236), str(total), font=base.ft(190), fill=base.ARCADE_YELLOW)
+    draw.text((495, 400), "分", font=base.ft(49), fill=base.ARCADE_YELLOW)
+    draw.line((610, 235, 610, 465), fill="#80651C", width=3)
+    _score_badge(draw, (814, 346), grade)
+    draw.text((738, 490), f"评级：{grade}", font=base.ft(31), fill=base.ARCADE_YELLOW)
+    draw.line((82, 526, 998, 526), fill="#59647C", width=2)
+    headline, good, improve = _score_summary(score)
+    _text(draw, (116, 552), headline, 29, base.ARCADE_TEXT, 830)
+    _text(draw, (116, 610), f"做得好：{good}", 25, base.ARCADE_CYAN, 830)
+    _text(draw, (116, 664), f"待改善：{improve}", 24, base.ARCADE_PINK, 830)
+    draw.text((52, 748), "下一次训练建议", font=base.ft(34), fill=base.ARCADE_YELLOW)
+    if _report_is_stable(primary, secondary):
+        # A fully stable scored report never receives filler prescriptions.
+        _text(draw, (84, 840), "动作控制稳定，继续保持这套节奏。", 42, base.ARCADE_TEXT, 860)
+        return image
+    for index, (label, item) in enumerate(_training_items(primary, secondary)):
+        _score_training_card(draw, index, label, item)
+    return image
+
+
 def _training_page(primary, secondary=None):
+    score = primary.get("_deadlift_score")
+    if base.exercise_of(primary) == "deadlift" and score is not None:
+        return _deadlift_score_page(primary, secondary, score)
     if _report_is_stable(primary, secondary):
         return _stable_closing_page(primary, secondary)
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
@@ -1217,7 +1303,13 @@ def _preview(paths, out):
 
 def render(primary, frames_dir, output_dir, secondary=None, secondary_frames_dir=None):
     output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
-    validate_training_links(primary, secondary)
+    if base.exercise_of(primary) == "deadlift" and secondary:
+        primary["_deadlift_score"] = score_deadlift(
+            primary, secondary, primary.get("_pose_tracking"), secondary.get("_pose_tracking"),
+        )
+    score = primary.get("_deadlift_score")
+    if not (score and not score.get("scorable")):
+        validate_training_links(primary, secondary)
     model = report_mode(primary, secondary)
     pages = [_photo_pair(primary, frames_dir, model["view_one"], 1)]
     pages.append(_photo_pair(secondary, secondary_frames_dir, model["view_two"], 2) if secondary else _filming_guidance(primary))
