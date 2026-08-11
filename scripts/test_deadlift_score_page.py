@@ -62,6 +62,25 @@ class DeadliftScorePageTests(unittest.TestCase):
         self.assertIn("未直接评分", neutral)
         self.assertIn("未发现", improve)
 
+    def test_training_cards_use_the_prior_text_first_layout(self):
+        """Score is the visual focus; prescription cards remain deliberately plain."""
+        calls = []
+        original = renderer._training_icon
+        renderer._training_icon = lambda *args: calls.append(args)
+        try:
+            image = renderer._deadlift_score_page(
+                PRIMARY,
+                None,
+                {
+                    "scorable": True, "total": 82, "grade": "A",
+                    "items": [{"id": "DL-01", "title": "杠铃轨迹", "status": "明显待改善", "detail": "二维横向漂移。"}],
+                },
+            )
+        finally:
+            renderer._training_icon = original
+        self.assertEqual(image.size, (1080, 1440))
+        self.assertEqual(calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

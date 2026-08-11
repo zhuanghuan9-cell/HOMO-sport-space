@@ -1273,20 +1273,19 @@ def _score_badge(draw, center, grade):
 
 
 def _score_training_card(draw, index, label, item):
+    """Keep the prescription area quieter than the score settlement above it."""
     box = SCORE_TRAINING_BOXES[index]
     x1, y1, x2, y2 = box
     color = (base.ARCADE_CYAN, base.ARCADE_PINK, base.ARCADE_YELLOW)[index]
     base.arcade_panel(draw, box, color, width=STRUCTURAL_BORDER)
-    cx, cy = x1 + 58, y1 + 48
-    draw.regular_polygon((cx, cy, 31), n_sides=6, rotation=30, outline=color, width=3)
-    draw.text((cx - 8, cy - 15), str(index + 1), font=base.ft(27), fill=color)
-    draw.text((x1 + 122, y1 + 18), label, font=base.ft(28), fill=color)
-    _text(draw, (x1 + 122, y1 + 58), item["name"], 27, base.ARCADE_TEXT, 438)
-    _text(draw, (x1 + 122, y1 + 112), item["dose"], 24, base.ARCADE_MUTED, 438)
+    # The previous compact layout intentionally uses only the semantic border
+    # and clear text.  The score panel already provides the page's game UI.
+    draw.text((x1 + 28, y1 + 18), f"{index + 1}｜{label}", font=base.ft(27), fill=color)
+    _text(draw, (x1 + 28, y1 + 55), item["name"], 31, base.ARCADE_TEXT, 510)
+    _text(draw, (x1 + 28, y1 + 101), item["dose"], 24, base.ARCADE_MUTED, 510)
     draw.line((x1 + 545, y1 + 24, x1 + 545, y2 - 24), fill="#405070", width=2)
-    _training_icon(draw, index, (x1 + 615, y1 + 81), color)
-    _text(draw, (x1 + 705, y1 + 34), item["target_label"], 20, color, 270)
-    _text(draw, (x1 + 705, y1 + 80), f"重点：{item['cue']}", 20, base.ARCADE_TEXT, 270)
+    _text(draw, (x1 + 580, y1 + 33), item["target_label"], 22, color, 350)
+    _text(draw, (x1 + 580, y1 + 78), f"口令：{item['cue']}", 21, base.ARCADE_TEXT, 350)
 
 
 def _deadlift_unscorable_page(primary, secondary, score):
