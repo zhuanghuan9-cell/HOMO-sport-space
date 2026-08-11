@@ -975,6 +975,7 @@ def _anatomy_occupancy(asset, panel):
 def _place_anatomy_labels(indices, occupancy, panel):
     """Place Page-3 text cards only in transparent space around mannequins."""
     placed = []
+    placement_occupancy = occupancy.copy()
     for item in indices:
         copy = dict(item)
         tx, ty = copy["target"]
@@ -982,12 +983,22 @@ def _place_anatomy_labels(indices, occupancy, panel):
         # the no-overlap candidate search.
         direction = -1 if tx > (panel[0] + panel[2]) / 2 else 1
         label_box, font_size, _ = _safe_label_box(
-            occupancy, panel, (tx, ty), f"{copy['number']} {copy['name']}", direction,
+            placement_occupancy, panel, (tx, ty), f"{copy['number']} {copy['name']}", direction,
         )
         copy["label_box"] = label_box
         copy["label"] = (label_box[0] + 9, label_box[1] + 7)
         copy["label_font_size"] = font_size
         placed.append(copy)
+        # A previously placed label becomes blocked space for all following
+        # labels.  This prevents two distinct muscle names from occupying the
+        # same background slot even when neither touches the mannequin.
+        local = (
+            max(0, label_box[0] - panel[0] - 6),
+            max(0, label_box[1] - panel[1] - 6),
+            min(placement_occupancy.width, label_box[2] - panel[0] + 6),
+            min(placement_occupancy.height, label_box[3] - panel[1] + 6),
+        )
+        ImageDraw.Draw(placement_occupancy).rectangle(local, fill=255)
     return placed
 
 

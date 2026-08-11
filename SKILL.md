@@ -192,6 +192,7 @@ The renderer owns a reviewed central-belly pixel mask for every supported precis
 
 - Whenever Page 1 or 2 describes a related muscle, Page 3 **must** render one same-colour index for that exact muscle and camera scope. The renderer must fail instead of creating a report with a missing index.
 - Each index must state: number, one precise muscle name, `正面` or `背面`, ring target, external label point, and `机位一` / `机位二` / `两机位` scope. Place each ring at the named muscle's geometric centre; never place it on an adjacent muscle, joint, bone, clothing, or outside the mannequin.
+- Place anatomy labels sequentially: every completed label card becomes blocked space for the next one. Two distinct muscle names must never overlap, share one card, or hide each other; if no separate safe background slot exists, fail the render rather than silently dropping a name.
 - If the default front/back mannequin cannot show a described muscle accurately, add a dedicated local anatomy inset for that structure before rendering. Do not omit it, substitute a broad term, or add an unrelated visible muscle merely to fill the page.
 - Do not use labels such as `臀腿后侧`、`躯干稳定`、`上背`、`核心`、`下肢`、`胸肌`、`臀肌`、`前臂` or `肩胛稳定肌` as an index name. Split structures that need separate points, e.g. 臀大肌 and 腘绳肌群. `前臂屈肌群` is acceptable because it is a named anatomical muscle group rather than the broad region `前臂`.
 - Use pink for `机位一`, cyan for `机位二`, and a split pink/cyan ring for `两机位`; the same colour must appear on the matching analysis card below.
