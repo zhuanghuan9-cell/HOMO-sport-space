@@ -25,6 +25,18 @@ class DeadliftScorePageTests(unittest.TestCase):
         self.assertEqual(layout["summary_rows"], (550, 610, 666))
         self.assertEqual(layout["training_boxes"][0], (52, 824, 1028, 986))
 
+    def test_score_and_grade_columns_are_equal_and_centered(self):
+        layout = renderer.score_settlement_layout()
+        left, right = layout["score_columns"]
+        self.assertEqual(left[2], right[0])
+        self.assertEqual(left[2] - left[0], right[2] - right[0])
+        self.assertAlmostEqual(layout["score_center"][0], (left[0] + left[2]) / 2, delta=2)
+        self.assertAlmostEqual(layout["grade_center"][0], (right[0] + right[2]) / 2, delta=2)
+        self.assertGreaterEqual(layout["score_font_size"], 240)
+        self.assertGreaterEqual(layout["grade_radius"], 145)
+        self.assertGreater(layout["grade_caption_center"][1], layout["grade_center"][1] + layout["grade_radius"])
+        self.assertLessEqual(layout["grade_caption_center"][1] + 16, 526)
+
     def test_scored_settlement_uses_only_allowed_grade_and_full_canvas(self):
         score = {
             "scorable": True, "total": 82, "grade": "A",

@@ -1214,7 +1214,45 @@ def _score_summary(score):
 
 def score_settlement_layout():
     """Public geometry contract for the arcade-style fourth-page settlement."""
-    return {"summary_rows": (550, 610, 666), "training_boxes": SCORE_TRAINING_BOXES}
+    # The score and grade get equal visual columns inside the top half of the
+    # settlement card.  Every placement below is derived from these rails.
+    return {
+        "summary_rows": (550, 610, 666),
+        "training_boxes": SCORE_TRAINING_BOXES,
+        "score_columns": ((82, 204, 540, 510), (540, 204, 998, 510)),
+        "score_center": (311, 358),
+        "grade_center": (769, 340),
+        "grade_caption_center": (769, 510),
+        "separator_x": 540,
+        "score_font_size": 250,
+        "unit_font_size": 54,
+        "grade_radius": 148,
+        "grade_font_size": 94,
+    }
+
+
+def _draw_centered_text(draw, center, text, font, fill, *, anchor="mm"):
+    """Center visible glyph bounds instead of relying on a font's origin."""
+    draw.text(center, text, font=font, fill=fill, anchor=anchor)
+
+
+def _draw_score_value(draw, center, total, layout):
+    """Draw ``79 分`` as one centered unit with a shared baseline."""
+    value_font = base.ft(layout["score_font_size"])
+    unit_font = base.ft(layout["unit_font_size"])
+    value_box = draw.textbbox((0, 0), str(total), font=value_font, anchor="ls")
+    unit_box = draw.textbbox((0, 0), "分", font=unit_font, anchor="ls")
+    value_width = value_box[2] - value_box[0]
+    unit_width = unit_box[2] - unit_box[0]
+    gap = 14
+    combined_width = value_width + gap + unit_width
+    value_x = center[0] - combined_width / 2 - value_box[0]
+    unit_x = value_x + value_width + gap - unit_box[0]
+    # Hiragino's digit glyphs sit about 96 px above their baseline at 250 px.
+    # This makes the measured digits, not their font origin, vertically centred.
+    baseline_y = center[1] + 96
+    draw.text((value_x, baseline_y), str(total), font=value_font, fill=base.ARCADE_YELLOW, anchor="ls")
+    draw.text((unit_x, baseline_y), "分", font=unit_font, fill=base.ARCADE_YELLOW, anchor="ls")
 
 
 def _settlement_icon(draw, kind, x, y, color):
@@ -1230,17 +1268,18 @@ def _settlement_icon(draw, kind, x, y, color):
         draw.text((x - 5, y - 9), "!", font=base.ft(23), fill=color)
 
 
-def _score_decorations(draw):
+def _score_decorations(draw, score_center):
     """Gold dial and restrained corner marks matching the settlement-panel HUD."""
     gold = base.ARCADE_YELLOW
     # The two arc groups read as a dial behind the score rather than a metric.
+    cx, _ = score_center
     for inset, width, start, end in ((0, 3, 212, 338), (22, 2, 198, 352), (44, 2, 206, 344)):
-        draw.arc((82 + inset, 186 + inset, 594 - inset, 700 - inset), start, end, fill="#7E6720", width=width)
+        draw.arc((cx - 240 + inset, 186 + inset, cx + 240 - inset, 666 - inset), start, end, fill="#7E6720", width=width)
     for x, y, dx, dy in ((66, 194, 24, 0), (66, 194, 0, 24), (1014, 194, -24, 0), (1014, 194, 0, 24), (66, 712, 24, 0), (66, 712, 0, -24), (1014, 712, -24, 0), (1014, 712, 0, -24)):
         draw.line((x, y, x + dx, y + dy), fill="#80651C", width=2)
     for index in range(8):
         angle = math.radians(212 + index * 16)
-        x = 338 + math.cos(angle) * 232
+        x = cx + math.cos(angle) * 218
         y = 442 + math.sin(angle) * 232
         draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=gold)
 
@@ -1263,13 +1302,12 @@ def _training_icon(draw, index, center, color):
         draw.line((x - 3, y + 10, x + 17, y + 10), fill=color, width=4)
 
 
-def _score_badge(draw, center, grade):
+def _score_badge(draw, center, grade, *, radius=148, font_size=94):
     """Yellow arcade grade seal; grades deliberately have no plus/minus."""
     cx, cy = center
-    draw.ellipse((cx - 126, cy - 126, cx + 126, cy + 126), fill="#0A142B", outline=base.ARCADE_YELLOW, width=7)
-    draw.ellipse((cx - 108, cy - 108, cx + 108, cy + 108), outline="#7E6720", width=3)
-    bbox = draw.textbbox((0, 0), grade, font=base.ft(78))
-    draw.text((cx - (bbox[2] - bbox[0]) / 2, cy - 54), grade, font=base.ft(78), fill=base.ARCADE_YELLOW)
+    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill="#0A142B", outline=base.ARCADE_YELLOW, width=7)
+    draw.ellipse((cx - radius + 18, cy - radius + 18, cx + radius - 18, cy + radius - 18), outline="#7E6720", width=3)
+    _draw_centered_text(draw, (cx, cy), grade, base.ft(font_size), base.ARCADE_YELLOW)
 
 
 def _score_training_card(draw, index, label, item):
@@ -1306,16 +1344,16 @@ def _deadlift_score_page(primary, secondary, score):
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
     _header(draw, 4, "deadlift", "", base.ARCADE_YELLOW, show_summary=False, header_title="动作总评｜这次硬拉表现如何")
     base.arcade_panel(draw, SCORE_BOX, base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
-    _score_decorations(draw)
+    layout = score_settlement_layout()
+    _score_decorations(draw, layout["score_center"])
     total, grade = score["total"], score["grade"]
-    draw.text((104, 236), str(total), font=base.ft(190), fill=base.ARCADE_YELLOW)
-    draw.text((495, 400), "分", font=base.ft(49), fill=base.ARCADE_YELLOW)
-    draw.line((610, 235, 610, 465), fill="#80651C", width=3)
-    _score_badge(draw, (814, 346), grade)
-    draw.text((738, 490), f"评级：{grade}", font=base.ft(31), fill=base.ARCADE_YELLOW)
+    _draw_score_value(draw, layout["score_center"], total, layout)
+    draw.line((layout["separator_x"], 224, layout["separator_x"], 476), fill="#80651C", width=3)
+    _score_badge(draw, layout["grade_center"], grade, radius=layout["grade_radius"], font_size=layout["grade_font_size"])
+    _draw_centered_text(draw, layout["grade_caption_center"], f"评级：{grade}", base.ft(33), base.ARCADE_YELLOW)
     draw.line((82, 526, 998, 526), fill="#59647C", width=2)
     headline, good, improve, neutral = _score_summary(score)
-    row_summary, row_good, row_improve = score_settlement_layout()["summary_rows"]
+    row_summary, row_good, row_improve = layout["summary_rows"]
     _settlement_icon(draw, "summary", 132, row_summary + 4, base.ARCADE_YELLOW)
     _settlement_icon(draw, "good", 132, row_good + 4, base.ARCADE_CYAN)
     _settlement_icon(draw, "improve", 132, row_improve + 4, base.ARCADE_PINK)
