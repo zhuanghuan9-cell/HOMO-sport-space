@@ -263,6 +263,20 @@ def validate(data: dict) -> list[str]:
     analysis_mode = (data.get("render") or {}).get("analysis_mode", "full")
     bar_tracking = data.get("bar_tracking") or {}
     bar_path_unavailable = analysis_mode == "bar_path_unavailable"
+    if bar_tracking:
+        status = bar_tracking.get("status")
+        if status not in {"available", "unavailable"}:
+            errors.append("bar_tracking.status must be available or unavailable")
+        if status == "available":
+            raw = bar_tracking.get("raw_points", bar_tracking.get("points"))
+            display = bar_tracking.get("display_points")
+            if not isinstance(raw, list) or len(raw) < 2:
+                errors.append("available bar_tracking requires at least two raw_points")
+            if not isinstance(display, list) or len(display) < len(raw):
+                errors.append("available bar_tracking requires display_points")
+            for point in display or []:
+                if point.get("display_source") == "smoothed_gap" and any(key in point for key in ("confidence", "radius")):
+                    errors.append("smoothed_gap must not masquerade as a raw measurement")
     if bar_path_unavailable:
         if bar_tracking.get("status") != "unavailable" or not bar_tracking.get("rejection_reasons"):
             errors.append("bar_path_unavailable requires rejected bar_tracking with a reason")

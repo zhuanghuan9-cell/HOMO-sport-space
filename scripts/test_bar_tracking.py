@@ -54,19 +54,36 @@ def test_candidate_continuity():
     result = tracker.best_track(rows)
     assert all(point is not None for point in result)
     assert max(point.y for point in result) - min(point.y for point in result) >= 60
-    assert not tracker.validate_track(result, [{}, {}, {}])
+    samples = [{"frame": frame} for frame in (10, 20, 30)]
+    assert not tracker.validate_track(result, samples, {10, 20, 30})
 
 
 def test_reject_static_background():
     points = [candidate(500, 100), candidate(500, 101), candidate(500, 100)]
-    reasons = tracker.validate_track(points, [{}, {}, {}])
+    reasons = tracker.validate_track(points, [{"frame": frame} for frame in (10, 20, 30)], {10, 20, 30})
     assert any("背景器械" in reason for reason in reasons)
 
 
 def test_reject_size_jump_and_missing():
+    samples = [{"frame": frame} for frame in (10, 20, 30)]
     assert any("尺寸不稳定" in reason for reason in tracker.validate_track(
-        [candidate(100, 200, 50), candidate(102, 270, 90), candidate(100, 210, 50)], [{}, {}, {}]))
-    assert tracker.validate_track([candidate(1, 1), None], [{}, {}])
+        [candidate(100, 200, 50), candidate(102, 270, 90), candidate(100, 210, 50)], samples, {10, 20, 30}))
+    assert tracker.validate_track([candidate(1, 1), None], samples[:2], {10, 20})
+
+
+def test_short_gap_is_visual_only_and_not_raw_evidence():
+    raw = [candidate(100 + index, 200 + index * 2) for index in range(100)]
+    for index in range(40, 44):
+        raw[index] = None
+    samples = [{"frame": 10 + index, "time": index / 30, "phase": "sample"} for index in range(100)]
+    display = tracker.display_points(raw, samples)
+    assert len(display) == 100
+    gap = next(item for item in display if item["frame"] == 51)
+    assert gap["display_source"] == "smoothed_gap"
+    # The display can bridge it, but the missing observation remains absent
+    # from raw evidence.  The full action still clears the strict coverage
+    # gate because the gap is short and no critical phase is missing.
+    assert not tracker.validate_track(raw, samples, {10, 60, 109})
 
 
 def test_unavailable_removes_path_conclusions_and_training():
@@ -84,7 +101,7 @@ def test_unavailable_removes_path_conclusions_and_training():
 
 def test_available_replaces_old_points_and_refuses_hash_mismatch():
     data = source()
-    bar = {"source_video": {"sha256": "a" * 64}, "bar_tracking": {"status": "available", "points": [
+    bar = {"source_video": {"sha256": "a" * 64}, "bar_tracking": {"status": "available", "raw_points": [
         {"frame": 10, "time": .33, "phase": "start", "x": 410, "y": 220},
         {"frame": 20, "time": .67, "phase": "bottom", "x": 412, "y": 350},
         {"frame": 30, "time": 1, "phase": "lockout", "x": 410, "y": 220},

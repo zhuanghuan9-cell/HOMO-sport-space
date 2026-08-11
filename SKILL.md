@@ -40,7 +40,7 @@ python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
 ```
 
    双机位的第二页可额外传入 `--secondary-pose-tracking`，且它必须与第二条源视频的 SHA-256 完全一致。后方硬拉/深蹲和脚端卧推中的骨架仍仅用于读者查看模型识别结果，不能超出该机位原本的左右同步判断边界。
-6. For a side or oblique view, run the strict automatic near-plate hub tracker before interpreting any bar path. It searches circular hub/rim candidates, locks one physical near plate by size and frame-to-frame continuity, and rejects—not fills—missing or ambiguous points. It never uses plate colour, lettering, fixed screen coordinates, manual correction, or interpolation.
+6. For a side or oblique view, run the strict automatic near-plate hub tracker before interpreting any bar path. It expands the chosen repetition into ~30fps samples, searches circular **and oblique elliptical** plate-rim/hub candidates, then locks one physical near plate by size and frame-to-frame continuity. It never uses plate colour, lettering, fixed screen coordinates, or manual correction.
 
 ```bash
 python3 scripts/track_barbell.py --video source.mp4 --phase-tracking tracking.json \
@@ -49,7 +49,7 @@ python3 scripts/compose_bar_tracking.py --tracking tracking.json \
   --bar-tracking bar-tracking.json --output report-safe.json
 ```
 
-   Only `bar_tracking.status: "available"` may supply `bar_path`, a bar-path conclusion, a path-related muscle direction, or a path-derived drill. Every key phase must be the same near-side plate hub. If the tracker sees a missing candidate, a plate-size jump, an abnormal frame-to-frame jump, a static/background circle, or ambiguity between plates, it emits `unavailable` with reasons. Render the composed `report-safe.json`; it preserves independent credible observations and pose visualisation, but says `当前视频无法可靠判断杠铃轨迹`, draws no old trace, and removes path-derived advice. Rear squat/deadlift and foot-end bench never run this single-hub tracker: they remain bilateral level/synchrony reviews.
+   Only `bar_tracking.status: "available"` may supply `raw_points` to `bar_path`, a bar-path conclusion, a path-related muscle direction, or a path-derived drill. Every key phase must be the same near-side plate hub. The tracker can make `display_points` for a short (≤4 sampled-frame) visual-only gap: these are explicitly marked `smoothed_gap`, never enter a metric or conclusion, and render as a lighter segment. If the tracker sees a missing critical phase, insufficient raw coverage, a plate-size jump, an abnormal frame-to-frame jump, a static/background circle, or ambiguity between plates, it emits `unavailable` with reasons. Render the composed `report-safe.json`; it preserves independent credible observations and pose visualisation, but says `当前视频无法可靠判断杠铃轨迹`, draws no old trace, and removes path-derived advice. Rear squat/deadlift and foot-end bench never run this single-hub tracker: they remain bilateral level/synchrony reviews.
 7. Save JSON using `references/tracking-schema.md`, then run:
 
 ```bash
@@ -72,7 +72,7 @@ python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames
 
    Both secondary arguments must be present together and both JSON files must describe the same lift. For dual-camera reports, manifests are mandatory: the renderer matches hash rather than argument order and fails before writing cards if a hash, view, confidence, or pair is invalid. Non-standard pairs are rejected rather than silently downgraded.
 11. Render every lift as four dark arcade cards in this fixed order:
-   - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、该机位自己的方向轨迹（仅严格杠片追踪可用时），以及“看到了什么 → 这意味着什么”。
+   - **机位一：这个角度看到的问题**：侧面／斜侧面优先；一句结论、两张带秒数的证据帧、整次重复的连续方向轨迹（仅严格杠片追踪可用时）。下降为青绿渐变、上升为蓝绿渐变；每段两个箭头；浅色段表示仅供阅读的短缺口平滑显示，以及“看到了什么 → 这意味着什么”。
    - **机位二：另一个角度看到的问题**：只在双机位时读取第二份 JSON；没有第二机位时改为补拍指导（缺失判断、机位高度、60 帧/秒与拍摄阶段）。稳定表现必须写明“稳定”，不得为了凑内容制造问题。
    - **对应肌群：分别优先加强什么**：正面＋背面像素人偶与索引圆点，说明相关肌群、动作作用与一句优化提示。写“优先加强／相关肌群”，绝不把二维视频写成“某肌肉薄弱”诊断。
    - **一次训练计划**：仅当存在已展示的明确待改善项时，严格显示技术主项、机位一纠正、机位二辅助三项；单机位时第三项为同问题辅助。每项均包含明确动作名、变式/器械或执行条件、剂量、短口令与`针对：`证据标签。若所有机位均稳定，设置 `findings.report_status: "stable"`：不得硬塞训练、肌肉强化方向或`针对：`标签；第四关改为“本组保持即可”，以“动作控制稳定，继续保持这套节奏。”收尾。

@@ -23,6 +23,7 @@ class Candidate:
     y: float
     radius: float
     score: float
+    source: str = "hough_circle"
 
 
 def sha256(path: Path) -> str:
@@ -33,70 +34,125 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def phase_points(source: dict) -> list[dict]:
-    """Use only phase timing from pre-existing tracking, never its old x/y."""
-    seen: dict[int, dict] = {}
-    for repetition in source.get("repetitions", []):
-        for point in repetition.get("bar_path", []):
-            if isinstance(point, dict) and isinstance(point.get("frame"), int) and isinstance(point.get("time"), (int, float)):
-                seen.setdefault(point["frame"], {"frame": point["frame"], "time": float(point["time"]), "phase": point.get("phase", "sample")})
-    return [seen[key] for key in sorted(seen)]
+MAX_GAP_FRAMES = 4
+MIN_RAW_COVERAGE = .92
+
+
+def action_samples(source: dict, fps: float) -> tuple[list[dict], set[int], dict]:
+    """Return ~30fps samples for the detailed/last repetition.
+
+    Existing paths provide *timing only*: their x/y values are intentionally
+    discarded.  Every original phase frame is included even in a 60fps source
+    so a required start/bottom/touch/lockout frame cannot be skipped.
+    """
+    repetitions = source.get("repetitions") or []
+    if not repetitions:
+        return [], set(), {}
+    old = [point for point in (repetitions[-1].get("bar_path") or [])
+           if isinstance(point, dict) and isinstance(point.get("frame"), int)]
+    if len(old) < 2:
+        return [], set(), {}
+    start, end = min(point["frame"] for point in old), max(point["frame"] for point in old)
+    phase_by_frame = {int(point["frame"]): str(point.get("phase") or "sample") for point in old}
+    step = max(1, round(fps / 30.0))
+    frames = set(range(start, end + 1, step)) | set(phase_by_frame)
+    samples = [{"frame": frame, "time": round(frame / fps, 6), "phase": phase_by_frame.get(frame, "sample")}
+               for frame in sorted(frames)]
+    return samples, set(phase_by_frame), {"start_frame": start, "end_frame": end, "sample_step_frames": step}
 
 
 def detect_candidates(frame: np.ndarray) -> list[Candidate]:
+    # Hough on a full phone frame is needlessly expensive.  Search at a fixed
+    # working size and map only the detected geometry back to source pixels.
+    height0, width0 = frame.shape[:2]
+    scale = min(1.0, 480.0 / max(width0, height0))
+    if scale < 1.0:
+        frame = cv2.resize(frame, (round(width0 * scale), round(height0 * scale)), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (7, 7), 1.5)
     height, width = gray.shape
+    edges = cv2.Canny(gray, 70, 160)
     circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=max(40, min(width, height) // 10),
                                param1=100, param2=30, minRadius=max(20, min(width, height) // 28),
                                maxRadius=max(35, min(width, height) // 4))
-    if circles is None:
-        return []
     candidates = []
-    for x, y, radius in circles[0]:
-        x, y, radius = float(x), float(y), float(radius)
+    for x, y, radius in circles[0] if circles is not None else []:
+        source_x, source_y, source_radius = float(x / scale), float(y / scale), float(radius / scale)
         # Strong circular edge evidence in a narrow annulus: plate rim/hub,
         # not red branding or a blob on an athlete's clothing.
         mask = np.zeros_like(gray)
         cv2.circle(mask, (round(x), round(y)), max(1, round(radius)), 255, 3)
-        edges = cv2.Canny(gray, 70, 160)
         edge_ratio = float((edges[mask > 0] > 0).mean()) if np.any(mask > 0) else 0.0
         if edge_ratio >= .16:
-            candidates.append(Candidate(x, y, radius, edge_ratio))
+            candidates.append(Candidate(source_x, source_y, source_radius, edge_ratio, "hough_circle"))
+    # A plate filmed from a slightly oblique angle is an ellipse, not a true
+    # circle.  Recover its geometric centre from a fitted rim contour instead
+    # of losing the whole path when Hough's circular assumption is too strict.
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    min_axis, max_axis = max(20, min(width, height) // 28), max(35, min(width, height) // 2)
+    for contour in contours:
+        if len(contour) < 20:
+            continue
+        (x, y), (axis_a, axis_b), _ = cv2.fitEllipse(contour)
+        minor, major = sorted((axis_a, axis_b))
+        if not (min_axis <= minor / 2 <= max_axis and major / 2 <= max_axis and minor / major >= .45):
+            continue
+        mask = np.zeros_like(gray)
+        cv2.ellipse(mask, ((round(x), round(y)), (round(axis_a), round(axis_b)), 0), 255, 2)
+        edge_ratio = float((edges[mask > 0] > 0).mean()) if np.any(mask > 0) else 0.0
+        if edge_ratio >= .20:
+            candidate = Candidate(float(x / scale), float(y / scale), float((minor / 2) / scale), edge_ratio, "ellipse_rim")
+            if not any(math.hypot(candidate.x - old.x, candidate.y - old.y) < max(12, candidate.radius * .25) for old in candidates):
+                candidates.append(candidate)
     return candidates
 
 
 def best_track(candidates_by_frame: list[list[Candidate]]) -> list[Candidate | None]:
-    """Dynamic-programming path: one similarly sized moving circular object."""
-    if not candidates_by_frame or any(not row for row in candidates_by_frame):
+    """Find one plate through a full action span without inventing points.
+
+    A candidate may bridge at most four missing samples.  The bridge is only a
+    *selection* rule: the absent frames remain ``None`` raw observations and
+    can later be rendered as a clearly visual-only smoothing segment.
+    """
+    if not candidates_by_frame or not candidates_by_frame[0] or not candidates_by_frame[-1]:
         return [None] * len(candidates_by_frame)
-    costs = [[-candidate.score for candidate in row] for row in candidates_by_frame]
-    parents: list[list[int | None]] = [[None] * len(row) for row in candidates_by_frame]
+    costs: list[list[float]] = [[math.inf] * len(row) for row in candidates_by_frame]
+    parents: list[list[tuple[int, int] | None]] = [[None] * len(row) for row in candidates_by_frame]
+    for j, candidate in enumerate(candidates_by_frame[0]):
+        costs[0][j] = -candidate.score
     for index in range(1, len(candidates_by_frame)):
-        previous, current = candidates_by_frame[index - 1], candidates_by_frame[index]
-        for j, candidate in enumerate(current):
+        for j, candidate in enumerate(candidates_by_frame[index]):
             best_value, best_parent = math.inf, None
-            for i, old in enumerate(previous):
-                distance = math.hypot(candidate.x - old.x, candidate.y - old.y)
-                radius_change = abs(candidate.radius - old.radius) / max(old.radius, 1)
-                # A background plate can be circular, but it cannot form a
-                # plausible motion-continuous path through every phase.
-                if distance > max(160, old.radius * 4.0) or radius_change > .35:
+            for previous_index in range(max(0, index - MAX_GAP_FRAMES - 1), index):
+                delta_frames = index - previous_index
+                # A bridge is permitted only across genuinely detector-empty
+                # frames.  Never skip an available observation just because a
+                # longer jump has a lower mathematical cost.
+                if delta_frames > 1 and any(candidates_by_frame[middle] for middle in range(previous_index + 1, index)):
                     continue
-                value = costs[index - 1][i] + distance / max(old.radius, 1) + radius_change * 8 - candidate.score
-                if value < best_value:
-                    best_value, best_parent = value, i
+                for i, old in enumerate(candidates_by_frame[previous_index]):
+                    if math.isinf(costs[previous_index][i]):
+                        continue
+                    distance = math.hypot(candidate.x - old.x, candidate.y - old.y)
+                    radius_change = abs(candidate.radius - old.radius) / max(old.radius, 1)
+                    if distance > max(80 * delta_frames, old.radius * 1.5 * delta_frames) or radius_change > .35:
+                        continue
+                    gap_penalty = (delta_frames - 1) * .55
+                    value = costs[previous_index][i] + distance / max(old.radius * delta_frames, 1) + radius_change * 8 + gap_penalty - candidate.score
+                    if value < best_value:
+                        best_value, best_parent = value, (previous_index, i)
             if best_parent is not None:
                 costs[index][j], parents[index][j] = best_value, best_parent
+
     def reconstruct(final_index: int) -> list[Candidate | None]:
         result: list[Candidate | None] = [None] * len(candidates_by_frame)
-        for index in range(len(candidates_by_frame) - 1, -1, -1):
+        index = len(candidates_by_frame) - 1
+        while True:
             result[index] = candidates_by_frame[index][final_index]
             parent = parents[index][final_index]
-            if index and parent is None:
-                return [None] * len(candidates_by_frame)
-            final_index = parent if parent is not None else final_index
-        return result
+            if parent is None:
+                return result if index == 0 else [None] * len(candidates_by_frame)
+            index, final_index = parent
 
     # A stationary circle is often a rack wheel or a background plate.  Choose
     # the most continuous *moving* candidate path, then let validation reject
@@ -122,17 +178,36 @@ def best_track(candidates_by_frame: list[list[Candidate]]) -> list[Candidate | N
     return min(choices, key=lambda item: item[0])[1]
 
 
-def validate_track(points: list[Candidate | None], phases: list[dict]) -> list[str]:
+def _longest_gap(points: list[Candidate | None]) -> int:
+    longest = current = 0
+    for point in points:
+        current = current + 1 if point is None else 0
+        longest = max(longest, current)
+    return longest
+
+
+def validate_track(points: list[Candidate | None], samples: list[dict], required_frames: set[int]) -> list[str]:
     reasons = []
-    if len(points) != len(phases) or any(point is None for point in points):
-        return ["至少一个关键阶段未检测到可信圆形杠片轴心"]
+    if len(points) != len(samples):
+        return ["杠铃追踪采样长度不完整"]
+    required = {sample["frame"] for sample, point in zip(samples, points) if sample["frame"] in required_frames and point is not None}
+    if required != required_frames:
+        reasons.append("至少一个关键阶段未检测到可信圆形杠片轴心")
+    coverage = sum(point is not None for point in points) / max(1, len(points))
+    if coverage < MIN_RAW_COVERAGE:
+        reasons.append("真实杠片轴心覆盖不足，无法形成可信完整轨迹")
+    if _longest_gap(points) > MAX_GAP_FRAMES:
+        reasons.append("连续缺失超过短遮挡容限")
     values = [point for point in points if point]
+    if len(values) < 2:
+        return reasons + ["可信杠片轴心点不足"]
     radii = [point.radius for point in values]
     median_radius = float(np.median(radii))
     if median_radius < 20 or max(abs(radius - median_radius) / median_radius for radius in radii) > .35:
         reasons.append("候选圆形尺寸不稳定，无法确认是同一杠片")
-    displacements = [math.hypot(b.x - a.x, b.y - a.y) for a, b in zip(values, values[1:])]
-    if displacements and max(displacements) > max(160, median_radius * 4):
+    indexed = [(index, point) for index, point in enumerate(points) if point]
+    displacements = [(b_index - a_index, math.hypot(b.x - a.x, b.y - a.y)) for (a_index, a), (b_index, b) in zip(indexed, indexed[1:])]
+    if displacements and any(distance > max(80 * delta, median_radius * 1.5 * delta) for delta, distance in displacements):
         reasons.append("相邻关键阶段出现不连续跳变")
     if float(np.mean([point.score for point in values])) < .18:
         reasons.append("圆形边缘证据不足，可能不是杠片轴心")
@@ -142,6 +217,31 @@ def validate_track(points: list[Candidate | None], phases: list[dict]) -> list[s
     return reasons
 
 
+def display_points(raw: list[Candidate | None], samples: list[dict]) -> list[dict]:
+    """Create visual-only smoothing, retaining every raw/inferred distinction."""
+    output: list[dict] = []
+    raw_indices = [index for index, point in enumerate(raw) if point]
+    for index, (sample, point) in enumerate(zip(samples, raw)):
+        record = {"frame": sample["frame"], "time": sample["time"], "phase": sample["phase"]}
+        if point:
+            neighbours = [raw[other] for other in range(max(0, index - 2), min(len(raw), index + 3)) if raw[other] is not None]
+            # Gentle weighted smoothing is presentation-only.  Raw x/y remains
+            # separately available for all metrics and report conclusions.
+            x = sum(item.x for item in neighbours) / len(neighbours)
+            y = sum(item.y for item in neighbours) / len(neighbours)
+            record.update({"x": round(x, 2), "y": round(y, 2), "display_source": "smoothed_raw"})
+        else:
+            before = max((other for other in raw_indices if other < index), default=None)
+            after = min((other for other in raw_indices if other > index), default=None)
+            if before is None or after is None or after - before - 1 > MAX_GAP_FRAMES:
+                continue
+            ratio = (index - before) / (after - before)
+            a, b = raw[before], raw[after]
+            record.update({"x": round(a.x + (b.x - a.x) * ratio, 2), "y": round(a.y + (b.y - a.y) * ratio, 2), "display_source": "smoothed_gap"})
+        output.append(record)
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Strict automatic near-plate hub tracker")
     parser.add_argument("--video", required=True, type=Path)
@@ -149,28 +249,39 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     source = json.loads(args.phase_tracking.read_text(encoding="utf-8"))
-    phases = phase_points(source)
     capture = cv2.VideoCapture(str(args.video))
     fps = float(capture.get(cv2.CAP_PROP_FPS)) or 30.0
     width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    candidates_by_frame = []
-    for phase in phases:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, phase["frame"])
+    samples, required_frames, action_span = action_samples(source, fps)
+    # Decode the action span once in chronological order; seeking separately
+    # for every 30fps sample is much slower and can produce codec-dependent
+    # off-by-one frames.
+    wanted = {sample["frame"] for sample in samples}
+    candidates_for_frame = {}
+    capture.set(cv2.CAP_PROP_POS_FRAMES, samples[0]["frame"] if samples else 0)
+    frame_number = samples[0]["frame"] if samples else 0
+    end_frame = samples[-1]["frame"] if samples else -1
+    while frame_number <= end_frame:
         ok, frame = capture.read()
-        candidates_by_frame.append(detect_candidates(frame) if ok else [])
+        if not ok:
+            break
+        if frame_number in wanted:
+            candidates_for_frame[frame_number] = detect_candidates(frame)
+        frame_number += 1
+    candidates_by_frame = [candidates_for_frame.get(sample["frame"], []) for sample in samples]
     capture.release()
     track = best_track(candidates_by_frame)
-    reasons = validate_track(track, phases)
+    reasons = validate_track(track, samples, required_frames)
     status = "available" if not reasons else "unavailable"
     points = []
-    for phase, point in zip(phases, track):
+    for sample, point in zip(samples, track):
         if point is None:
             continue
-        points.append({"frame": phase["frame"], "time": phase["time"], "phase": phase["phase"], "x": round(point.x, 2), "y": round(point.y, 2), "radius": round(point.radius, 2), "confidence": round(point.score, 4), "source": "hough_circle_continuity"})
+        points.append({"frame": sample["frame"], "time": sample["time"], "phase": sample["phase"], "x": round(point.x, 2), "y": round(point.y, 2), "radius": round(point.radius, 2), "confidence": round(point.score, 4), "source": point.source})
     payload = {
         "schema_version": 1,
         "source_video": {"sha256": sha256(args.video), "filename": args.video.name, "image_size": [width, height], "fps": fps},
-        "bar_tracking": {"status": status, "anchor": "near_plate_hub", "method": "hough_circle_continuity", "points": points if status == "available" else [], "rejection_reasons": reasons, "phase_count": len(phases)},
+        "bar_tracking": {"status": status, "anchor": "near_plate_hub", "method": "hough_circle_continuity", "sample_rate_fps": round(fps / action_span.get("sample_step_frames", 1), 2) if action_span else 0, "action_span": action_span, "raw_points": points if status == "available" else [], "display_points": display_points(track, samples) if status == "available" else [], "rejection_reasons": reasons, "phase_count": len(required_frames)},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -26,7 +26,10 @@ def compose(tracking: dict, bar: dict) -> dict:
         raise ValueError("bar tracking source hash does not match report tracking")
     result["bar_tracking"] = bar_data
     if bar_data["status"] == "available":
-        result["repetitions"][-1]["bar_path"] = [{key: point[key] for key in ("frame", "time", "phase", "x", "y")} for point in bar_data["points"]]
+        raw_points = bar_data.get("raw_points", bar_data.get("points", []))
+        if len(raw_points) < 2:
+            raise ValueError("available bar tracking requires raw_points")
+        result["repetitions"][-1]["bar_path"] = [{key: point[key] for key in ("frame", "time", "phase", "x", "y")} for point in raw_points]
         return result
     findings = result.setdefault("findings", {})
     removed_ids = {item.get("id") for item in findings.get("evidence", []) if is_bar_finding(item)}

@@ -170,6 +170,14 @@ def bar_path_available(data):
     return status != "unavailable"
 
 
+def display_bar_path(data, rep):
+    """Use visual smoothing only from a strict tracker; never old path points."""
+    tracked = (data.get("bar_tracking") or {})
+    if tracked.get("status") == "available":
+        return tracked.get("display_points") or []
+    return rep.get("bar_path") or []
+
+
 def _view(data):
     # Legacy tracking files predate the explicit view field. Their primary
     # recordings were captured as the default side/oblique review camera.
@@ -534,8 +542,15 @@ def _photo_pair(data, frames_dir, finding, page):
             _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
     # Path remains within the second frame and only represents this view.
     # Rear squat uses paired bar ends instead of a misleading one-point path.
-    if not rear_level_evidence and path_available:
-        base.arcade_trace(draw, rep["bar_path"], contexts[1][0], contexts[1][1], base.ARCADE_CYAN, base.ARCADE_BLUE, 8)
+    if not rear_level_evidence and not foot_end_bench and path_available:
+        points = display_bar_path(data, rep)
+        if (data.get("bar_tracking") or {}).get("status") == "available":
+            base.arcade_continuous_trace(draw, points, contexts[1][0], contexts[1][1], exercise, 8)
+            if any(point.get("display_source") == "smoothed_gap" for point in points):
+                draw.rounded_rectangle((contexts[1][1][0] + 12, contexts[1][1][3] - 38, contexts[1][1][0] + 202, contexts[1][1][3] - 14), radius=6, fill="#0C1732", outline="#B9C8D9", width=2)
+                draw.text((contexts[1][1][0] + 20, contexts[1][1][3] - 35), "浅色段＝平滑显示", font=base.ft(16), fill="#D5E1F0")
+        else:
+            base.arcade_trace(draw, points, contexts[1][0], contexts[1][1], base.ARCADE_CYAN, base.ARCADE_BLUE, 8)
     if page == 1 and exercise == "deadlift" and path_available:
         _deadlift_drift_callout(draw, data, rep, contexts[1][0], contexts[1][1])
     base.arcade_panel(draw, (FULL_X_BOUNDS[0], 992, FULL_X_BOUNDS[1], 1166), base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)

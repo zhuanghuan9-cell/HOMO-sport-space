@@ -6,11 +6,16 @@ Use one UTF-8 JSON file as the source of truth.
 
 `bar-tracking.json` is a separate automatic audit file created by
 `scripts/track_barbell.py`. It never overwrites the source tracking. Its
-`bar_tracking.status` is either `available` or `unavailable`; it stores only
-near-side plate hub points that passed circular-candidate, size, continuity,
-and motion gates. It must include the source SHA-256, per-point confidence and
-radius, and rejection reasons when unavailable. Do not interpolate, manually
-correct, reuse an old path, or use colour/text/fixed-coordinate detection.
+`bar_tracking.status` is either `available` or `unavailable`; it stores
+`raw_points` from approximately 30fps circular/elliptical near-side plate
+candidate tracking that passed size, continuity, and motion gates. It also
+stores `display_points`: a presentation-only lightly smoothed version of raw
+points, with short visual bridges marked `display_source: "smoothed_gap"`.
+Only `raw_points` may drive `bar_path`, metrics, findings, muscle directions,
+or training. It must include the source SHA-256, per-point confidence and
+radius, action span, sampling rate, and rejection reasons when unavailable.
+Do not manually correct, reuse an old path, or use colour/text/fixed-coordinate
+detection.
 
 Only an `available` result may be composed into `bar_path`:
 

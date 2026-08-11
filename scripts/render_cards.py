@@ -619,6 +619,65 @@ def arcade_trace(draw, points, crop, box, start_color=ARCADE_CYAN, end_color=ARC
     return arcade_trace_mapped(draw, mapped, start_color, end_color, width)
 
 
+def _mix_hex(first, second, ratio):
+    a = tuple(int(first[index:index + 2], 16) for index in (1, 3, 5))
+    b = tuple(int(second[index:index + 2], 16) for index in (1, 3, 5))
+    return tuple(round(x + (y - x) * ratio) for x, y in zip(a, b))
+
+
+def _trace_arrow(draw, start, end, color, size=16):
+    angle = math.atan2(end[1] - start[1], end[0] - start[0])
+    tip = (start[0] * .35 + end[0] * .65, start[1] * .35 + end[1] * .65)
+    left = (tip[0] - size * math.cos(angle - .55), tip[1] - size * math.sin(angle - .55))
+    right = (tip[0] - size * math.cos(angle + .55), tip[1] - size * math.sin(angle + .55))
+    draw.polygon((tip, left, right), fill=color)
+
+
+def arcade_continuous_trace(draw, points, crop, box, exercise, width=8):
+    """Render a complete side-view path with visual-only gap smoothing.
+
+    `smoothed_gap` records are never used for metrics.  Their lighter line
+    simply tells a viewer why a short portion of the otherwise continuous path
+    looks softer.  The function intentionally has no fallback to old paths.
+    """
+    if len(points) < 2:
+        return []
+    mapped = []
+    for point in points:
+        x, y = map_point(point, crop, box)
+        mapped.append({**point, "mapped": (min(max(x, box[0]), box[2]), min(max(y, box[1]), box[3]))})
+    if exercise in {"squat", "bench_press"}:
+        turning = max(range(len(mapped)), key=lambda index: mapped[index]["mapped"][1])
+    else:
+        turning = 0
+    directions = ["ascent" if exercise == "deadlift" or index >= turning else "descent" for index in range(len(mapped))]
+    palette = {
+        "descent": ("#8FF7E2", ARCADE_CYAN),
+        "ascent": ("#9CCBFF", ARCADE_BLUE),
+    }
+    segments = []
+    for index, (a, b) in enumerate(zip(mapped, mapped[1:])):
+        direction = directions[index]
+        start, end = palette[direction]
+        ratio = index / max(1, len(mapped) - 2)
+        color = _mix_hex(start, end, ratio)
+        smoothed = a.get("display_source") == "smoothed_gap" or b.get("display_source") == "smoothed_gap"
+        if smoothed:
+            color = _mix_hex("#0B1630", "#D5E1F0", .55)
+        draw.line((*a["mapped"], *b["mapped"]), fill=color, width=width)
+        segments.append({"start": a, "end": b, "direction": direction, "smoothed": smoothed, "color": color})
+    # Exactly two directional arrows per visible phase where the phase has
+    # enough real segments.  No dense sampling dots are drawn.
+    for direction in ("descent", "ascent"):
+        eligible = [segment for segment in segments if segment["direction"] == direction and not segment["smoothed"]]
+        if not eligible:
+            continue
+        for ratio in (.35, .7):
+            segment = eligible[min(len(eligible) - 1, round((len(eligible) - 1) * ratio))]
+            _trace_arrow(draw, segment["start"]["mapped"], segment["end"]["mapped"], segment["color"])
+    return mapped
+
+
 def bench_summary_touch_frames(data):
     first, last = data["repetitions"][0], data["repetitions"][-1]
     return (
