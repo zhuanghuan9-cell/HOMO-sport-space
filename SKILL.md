@@ -91,8 +91,15 @@ When the user asks not to crop the original video, set `render.video_photo_fit: 
 
 Every screenshot annotation must be fully contained by the **actual displayed video content box**: dots, arrows, dashes, leader lines, label frames, and the measured text bounds. In `contain` mode, the side margins are card decoration, not video content; no annotation may enter them.
 
-- Fit labels by wrapping at a short phrase first, then reposition them. Keep type at or above 20px. If the annotation still cannot fit, fail rendering and shorten the label; never shrink it into illegibility or let it cross the video border.
-- The leader line must start at the verified point and terminate on the nearest edge of its label frame. Stage/time labels also remain inside their own photo card.
+### External Callout Safety Gate
+
+All **text**, label cards, and explanatory icons on Pages 1–3 must be placed in background space, never over a lifter, barbell, plate, or mannequin. Keep necessary target rings, thin leader lines, RTMPose links, and a confidence-gated continuous bar path on their true targets; they contain no text.
+
+- For each evidence frame, run `scripts/segment_person.swift` with macOS Vision and cache its silhouette mask. Dilate it for a visual safety margin, then add the tracked bar/plate, rendered trajectory, endpoint arrows, timestamps, and existing labels as blocked space.
+- Search only the actual displayed video content box for a zero-overlap label card. Try background corners, sides, and upper/lower empty areas; wrap at a short phrase first, then reduce from 23px to no smaller than 20px.
+- A leader line starts at the verified target point and terminates at the nearest label-card edge. It may briefly leave the target anatomy, but no text frame or icon may touch the subject or equipment.
+- Person segmentation missing, an empty/low-confidence mask, or no readable safe area is a hard render failure. Shorten the evidence label or select a nearby phase frame; never place text in the `contain` side decoration, outside the frame, or over the body/barbell.
+- Page-3 anatomy labels use the canonical mannequin alpha mask as the same hard exclusion zone. Index rings stay on the precise muscle; their text cards must be in transparent panel space with a thin leader line.
 
 ### Rear Bar-Level Protocol
 

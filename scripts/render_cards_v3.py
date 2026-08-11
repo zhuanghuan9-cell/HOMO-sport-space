@@ -8,11 +8,14 @@ drawn from the first one.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 
-from PIL import Image, ImageChops, ImageDraw, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from compose_bar_tracking import compose as compose_bar_tracking
 
@@ -233,7 +236,7 @@ def validate_deadlift_path_reporting(data, finding):
         raise ValueError("deadlift visible bar drift cannot be labelled as a stable or continuous bar path")
 
 
-def _deadlift_drift_callout(draw, data, rep, crop, photo_box):
+def _deadlift_drift_callout(draw, data, frames_dir, rep, crop, photo_box):
     """Add a readable start-line and endpoint offset only when it is material."""
     review = deadlift_path_review(data, rep)
     if not review["needs_report"]:
@@ -247,11 +250,13 @@ def _deadlift_drift_callout(draw, data, rep, crop, photo_box):
     direction = 1 if xe >= x0 else -1
     draw.polygon(((xe, ye), (xe - direction * 14, ye - 8), (xe - direction * 14, ye + 8)), fill=base.ARCADE_PINK)
     label = "终点向右偏移" if review["direction"] == "画面右侧" else "终点向左偏移"
-    # Keep the explanation in the empty ceiling area, not over the lifter or plate.
-    label_x = photo_box[2] - 182
-    label_y = photo_box[1] + 14
-    draw.rounded_rectangle((label_x, label_y, label_x + 170, label_y + 38), radius=8, fill="#111D3A", outline=base.ARCADE_PINK, width=3)
-    draw.text((label_x + 10, label_y + 7), label, font=base.ft(19), fill=base.ARCADE_PINK)
+    existing = getattr(draw, "_callout_boxes", [])
+    occupancy = _annotation_occupancy(
+        data, frames_dir, review["endpoint"]["frame"], crop, photo_box,
+        ((review["start"], 44, True), (review["endpoint"], 44, True)), existing,
+    )
+    result = _draw_external_label(draw, occupancy, photo_box, endpoint, label, base.ARCADE_PINK, direction)
+    draw._callout_boxes = [*existing, result["label_box"]]
 
 
 def pin_label_text(label, max_chars=8):
@@ -292,20 +297,133 @@ def _content_contains(box, content, inset=0):
     return box[0] >= content[0] + inset and box[1] >= content[1] + inset and box[2] <= content[2] - inset and box[3] <= content[3] - inset
 
 
-def _fit_video_label(draw, label, photo_box, font_size=23, margin=16):
-    """Measure a readable label before drawing; never permit frame overflow."""
-    available_w = photo_box[2] - photo_box[0] - margin * 2
-    available_h = photo_box[3] - photo_box[1] - margin * 2
+def _mask_cache_path(frame_path):
+    digest = hashlib.sha256(str(frame_path.resolve()).encode() + str(frame_path.stat().st_mtime_ns).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / "powerlifting-person-masks" / f"{digest}.png"
+
+
+def _person_mask_for_frame(frame_path):
+    """Return a Vision-derived person silhouette or fail closed.
+
+    It intentionally does not borrow RTMPose coordinates: pose may be missing
+    exactly when a label needs to avoid a partially occluded athlete.
+    """
+    cached = _mask_cache_path(frame_path)
+    if not cached.exists():
+        script = Path(__file__).with_name("segment_person.swift")
+        completed = subprocess.run(
+            ["swift", str(script), str(frame_path), str(cached)], text=True,
+            capture_output=True, check=False,
+        )
+        if completed.returncode != 0 or not cached.exists():
+            detail = (completed.stderr or completed.stdout or "unknown Vision error").strip()
+            raise ValueError(f"person segmentation unavailable; refusing label placement: {detail}")
+    mask = Image.open(cached).convert("L")
+    if mask.getbbox() is None:
+        raise ValueError("person segmentation returned an empty mask; refusing label placement")
+    with Image.open(frame_path) as source:
+        if mask.size != source.size:
+            mask = mask.resize(source.size, Image.Resampling.NEAREST)
+    foreground = sum(mask.histogram()[24:])
+    coverage = foreground / max(1, mask.width * mask.height)
+    if coverage < 0.003 or coverage > 0.90:
+        raise ValueError(f"person segmentation mask confidence is unusable ({coverage:.1%} foreground); refusing label placement")
+    return mask
+
+
+def _mask_to_content(mask, crop, photo_box):
+    """Map a source person mask through the exact crop/contain transform."""
+    x1, y1, x2, y2 = map(int, crop)
+    region = mask.crop((x1, y1, x2, y2))
+    width, height = photo_box[2] - photo_box[0], photo_box[3] - photo_box[1]
+    return region.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _point_obstacle(mask, point, crop, photo_box, radius=30, horizontal_bar=False):
+    x, y = base.map_point(point, crop, photo_box)
+    local = ImageDraw.Draw(mask)
+    local_x, local_y = int(x - photo_box[0]), int(y - photo_box[1])
+    local.ellipse((local_x-radius, local_y-radius, local_x+radius, local_y+radius), fill=255)
+    if horizontal_bar:
+        local.rectangle((0, local_y - 16, mask.width, local_y + 16), fill=255)
+
+
+def _annotation_occupancy(data, frames_dir, frame, crop, photo_box, blockers=(), existing_boxes=()):
+    """Build the zero-overlap exclusion mask in local photo coordinates."""
+    frame_path = base.frame_file(frames_dir, int(frame))
+    source = _person_mask_for_frame(frame_path)
+    mask = _mask_to_content(source, crop, photo_box)
+    # Anti-aliased silhouette edges and clothing boundaries need a real safety
+    # margin, otherwise a dark label can visually touch the athlete.
+    mask = mask.point(lambda value: 255 if value >= 24 else 0).filter(ImageFilter.MaxFilter(33))
+    for point, radius, is_bar in blockers:
+        _point_obstacle(mask, point, crop, photo_box, radius, is_bar)
+    # The full continuous trace is visible on the final evidence screenshot.
+    # Treat it as occupied so an explanatory card cannot cover it.
+    rep = _rep(data)
+    path = display_bar_path(data, rep) if bar_path_available(data) else []
+    if path and int(frame) == int(path[-1].get("frame", -1)):
+        for point in path:
+            _point_obstacle(mask, point, crop, photo_box, radius=10, horizontal_bar=False)
+    for box in existing_boxes:
+        local = (int(box[0] - photo_box[0]), int(box[1] - photo_box[1]), int(box[2] - photo_box[0]), int(box[3] - photo_box[1]))
+        if local[2] > 0 and local[3] > 0 and local[0] < mask.width and local[1] < mask.height:
+            ImageDraw.Draw(mask).rectangle(local, fill=255)
+    return mask
+
+
+def _label_measure(label, font_size, max_width):
+    probe = ImageDraw.Draw(Image.new("RGB", (8, 8), base.ARCADE_BG))
+    chars = max(3, int((max_width - 30) // font_size))
+    text = pin_label_text(label, chars)
+    bounds = probe.multiline_textbbox((0, 0), text, font=base.ft(font_size), spacing=4)
+    return text, int(bounds[2] - bounds[0] + 30), int(bounds[3] - bounds[1] + 24)
+
+
+def _safe_label_box(occupancy, photo_box, target, label, direction=1, margin=16):
+    """Find a readable, in-frame background box with zero obstacle overlap."""
+    local_photo = (0, 0, photo_box[2] - photo_box[0], photo_box[3] - photo_box[1])
+    target_local = (target[0] - photo_box[0], target[1] - photo_box[1])
+    available_w = local_photo[2] - margin * 2
+    available_h = local_photo[3] - margin * 2
     if available_w < 120 or available_h < 74:
         raise ValueError("video annotation cannot fit inside the displayed content box")
-    max_chars = max(4, int((available_w - 30) // font_size))
-    text = pin_label_text(label, max_chars)
-    bbox = draw.multiline_textbbox((0, 0), text, font=base.ft(font_size), spacing=4)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    width, height = text_w + 30, text_h + 24
-    if width > available_w or height > available_h:
-        raise ValueError("video annotation cannot fit inside the displayed content box")
-    return text, int(width), int(height)
+    for font_size in (23, 22, 21, 20):
+        text, width, height = _label_measure(label, font_size, available_w)
+        if width > available_w or height > available_h:
+            continue
+        # Candidate search is deliberately in-frame only.  It favours the
+        # requested side but scores every background corner/edge before use.
+        candidates = []
+        for y in range(margin, max(margin + 1, local_photo[3] - height - margin + 1), 12):
+            for x in range(margin, max(margin + 1, local_photo[2] - width - margin + 1), 12):
+                box = (x, y, x + width, y + height)
+                if occupancy.crop(box).getbbox() is not None:
+                    continue
+                center_x, center_y = x + width / 2, y + height / 2
+                side_penalty = 0 if (center_x - target_local[0]) * direction >= 0 else 1500
+                distance = (center_x - target_local[0]) ** 2 + (center_y - target_local[1]) ** 2
+                candidates.append((side_penalty + distance, box))
+        if candidates:
+            _, box = min(candidates, key=lambda item: item[0])
+            return (
+                (box[0] + photo_box[0], box[1] + photo_box[1], box[2] + photo_box[0], box[3] + photo_box[1]),
+                font_size,
+                text,
+            )
+    raise ValueError("no safe background inside video content for annotation label")
+
+
+def _draw_external_label(draw, occupancy, photo_box, target, label, color, direction=1):
+    label_box, font_size, text = _safe_label_box(occupancy, photo_box, target, label, direction)
+    anchor = _nearest_box_edge(target, label_box)
+    # The line may leave the target point on the subject, but all text and
+    # label chrome stay in verified background.  It is kept thin to avoid
+    # obscuring unrelated anatomy on its way out.
+    draw.line((*target, *anchor), fill=color, width=2)
+    draw.rounded_rectangle(label_box, radius=8, fill=base.ARCADE_BG, outline=color, width=3)
+    draw.multiline_text((label_box[0] + 14, label_box[1] + 10), text, font=base.ft(font_size), fill=color, spacing=4)
+    return {"label_box": label_box, "anchor": anchor, "font_size": font_size}
 
 
 def bilateral_wrists_at(rep, frame):
@@ -332,26 +450,19 @@ def _nearest_box_edge(point, box):
     return min(candidates, key=lambda candidate: (candidate[0] - x) ** 2 + (candidate[1] - y) ** 2)
 
 
-def _pin(draw, point, crop, photo_box, label, color, direction=1):
+def _pin(draw, data, frames_dir, point, crop, photo_box, label, color, direction=1, bar_target=True):
     x, y = base.map_point(point, crop, photo_box)
     # A point from a full-source/contain mapping must remain an actual video
     # point. Do not move it merely to make room for the label.
     if not (photo_box[0] + 10 <= x <= photo_box[2] - 10 and photo_box[1] + 10 <= y <= photo_box[3] - 10):
         raise ValueError("video annotation point falls outside the displayed content box")
-    text, width, height = _fit_video_label(draw, label, photo_box)
-    margin = 16
-    proposed_x = x + 30 if direction > 0 else x - width - 30
-    lx = min(max(proposed_x, photo_box[0] + margin), photo_box[2] - width - margin)
-    ly = min(max(y - height / 2, photo_box[1] + margin), photo_box[3] - height - margin)
-    label_box = (int(lx), int(ly), int(lx + width), int(ly + height))
-    if not _content_contains(label_box, photo_box, margin):
-        raise ValueError("video annotation cannot fit inside the displayed content box")
-    anchor = _nearest_box_edge((x, y), label_box)
+    blockers = ((point, 44, True),) if bar_target else ()
+    existing = getattr(draw, "_callout_boxes", [])
+    occupancy = _annotation_occupancy(data, frames_dir, point["frame"], crop, photo_box, blockers, existing)
     draw.ellipse((x - 10, y - 10, x + 10, y + 10), fill=color, outline=base.ARCADE_BG, width=3)
-    draw.line((x, y, anchor[0], anchor[1]), fill=color, width=4)
-    draw.rounded_rectangle(label_box, radius=8, fill=base.ARCADE_BG, outline=color, width=3)
-    draw.multiline_text((label_box[0] + 14, label_box[1] + 10), text, font=base.ft(23), fill=color, spacing=4)
-    return {"point": (x, y), "label_box": label_box, "anchor": anchor}
+    result = _draw_external_label(draw, occupancy, photo_box, (x, y), label, color, direction)
+    draw._callout_boxes = [*existing, result["label_box"]]
+    return {"point": (x, y), **result}
 
 
 POSE_CONNECTIONS = (
@@ -394,9 +505,8 @@ def _draw_pose_overlay(draw, data, point, crop, photo_box):
             draw.line((*mapped[start], *mapped[end]), fill="#78E7DD", width=4)
     for x, y in mapped.values():
         draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill="#0C1732", outline="#78E7DD", width=3)
-    if mapped:
-        draw.rounded_rectangle((photo_box[0] + 12, photo_box[3] - 38, photo_box[0] + 162, photo_box[3] - 14), radius=6, fill="#0C1732", outline="#78E7DD", width=2)
-        draw.text((photo_box[0] + 20, photo_box[3] - 35), "模型识别：可见关节", font=base.ft(16), fill="#78E7DD")
+    # No text legend is placed over the evidence frame: the visible rings and
+    # links are sufficient, while textual callouts use the safe-zone gate.
 
 
 def _bilateral_wrist_evidence(draw, rep, point, crop, photo_box, color):
@@ -418,7 +528,7 @@ def _bilateral_wrist_evidence(draw, rep, point, crop, photo_box, color):
     return True
 
 
-def _rear_bar_end_evidence(draw, evidence, crop, photo_box, color, show_arrows=False):
+def _rear_bar_end_evidence(draw, data, frames_dir, evidence, crop, photo_box, color, show_arrows=False):
     """Rear evidence: compare both bar ends, never a single-point path."""
     left = evidence["screen_left"]
     right = evidence["screen_right"]
@@ -442,18 +552,15 @@ def _rear_bar_end_evidence(draw, evidence, crop, photo_box, color, show_arrows=F
             draw.line((x, y - 4, x, tip_y + 9), fill=color, width=4)
             draw.polygon(((x, tip_y), (x - 9, tip_y + 14), (x + 9, tip_y + 14)), fill=color)
 
-    label, width, height = _fit_video_label(draw, evidence["label"], photo_box)
     mid_x, mid_y = (lx + rx) / 2, (ly + ry) / 2
-    box_x = min(max(mid_x - width / 2, photo_box[0] + 16), photo_box[2] - width - 16)
-    box_y = min(max(min(ly, ry) - height - 34, photo_box[1] + 16), photo_box[3] - height - 16)
-    label_box = (int(box_x), int(box_y), int(box_x + width), int(box_y + height))
-    if not _content_contains(label_box, photo_box, 16):
-        raise ValueError("video annotation cannot fit inside the displayed content box")
-    anchor = _nearest_box_edge((mid_x, mid_y), label_box)
-    draw.line((mid_x, mid_y, anchor[0], anchor[1]), fill=color, width=4)
-    draw.rounded_rectangle(label_box, radius=8, fill=base.ARCADE_BG, outline=color, width=3)
-    draw.multiline_text((label_box[0] + 14, label_box[1] + 10), label, font=base.ft(23), fill=color, spacing=4)
-    return {"left": (lx, ly), "right": (rx, ry), "label_box": label_box, "anchor": anchor}
+    existing = getattr(draw, "_callout_boxes", [])
+    occupancy = _annotation_occupancy(
+        data, frames_dir, evidence["frame"], crop, photo_box,
+        ((left, 44, True), (right, 44, True)), existing,
+    )
+    result = _draw_external_label(draw, occupancy, photo_box, (mid_x, mid_y), evidence["label"], color, 1)
+    draw._callout_boxes = [*existing, result["label_box"]]
+    return {"left": (lx, ly), "right": (rx, ry), **result}
 
 
 def _header(draw, page, exercise, title, color, show_summary=True, header_title=None):
@@ -487,6 +594,7 @@ def _photo_pair(data, frames_dir, finding, page):
     exercise = base.exercise_of(data)
     first, last = _key_frames(rep, (data.get("v3") or {}).get("evidence"))
     image = base.arcade_canvas(); draw = ImageDraw.Draw(image)
+    draw._callout_boxes = []
     # Colour communicates the camera role consistently: the preferred
     # side/oblique view is pink, while the independent symmetry camera is
     # cyan.  A non-stable title must not accidentally recolour Page 2 pink.
@@ -528,18 +636,18 @@ def _photo_pair(data, frames_dir, finding, page):
             # verified evidence point and keeps a stable pair from being
             # mislabelled as screen-left low.
             label = point.get("label") or ("画面左端略低" if index == 1 else "两端同步推起")
-            _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
+            _pin(draw, data, frames_dir, point, crop, inner, label, color, 1 if index == 1 else -1)
         elif rear_level_evidence:
-            _rear_bar_end_evidence(draw, point, crop, inner, color, show_arrows=index == 2)
+            _rear_bar_end_evidence(draw, data, frames_dir, point, crop, inner, color, show_arrows=index == 2)
         elif hip_timing_deadlift:
             label = point.get("label") or ("起始髋位" if index == 1 else "髋已先上移")
-            _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
+            _pin(draw, data, frames_dir, point, crop, inner, label, color, 1 if index == 1 else -1, bar_target=False)
         elif path_available:
             # Key-frame labels describe the evidence visible in that exact
             # frame.  Fall back to the report title only for older tracking
             # JSON that has no frame-specific annotation.
             label = point.get("label") or (finding["title"] if index == 1 else "推起回程")
-            _pin(draw, point, crop, inner, label, color, 1 if index == 1 else -1)
+            _pin(draw, data, frames_dir, point, crop, inner, label, color, 1 if index == 1 else -1)
     # Path remains within the second frame and only represents this view.
     # Rear squat uses paired bar ends instead of a misleading one-point path.
     if not rear_level_evidence and not foot_end_bench and path_available:
@@ -552,7 +660,7 @@ def _photo_pair(data, frames_dir, finding, page):
         else:
             base.arcade_trace(draw, points, contexts[1][0], contexts[1][1], base.ARCADE_CYAN, base.ARCADE_BLUE, 8)
     if page == 1 and exercise == "deadlift" and path_available:
-        _deadlift_drift_callout(draw, data, rep, contexts[1][0], contexts[1][1])
+        _deadlift_drift_callout(draw, data, frames_dir, rep, contexts[1][0], contexts[1][1])
     base.arcade_panel(draw, (FULL_X_BOUNDS[0], 992, FULL_X_BOUNDS[1], 1166), base.ARCADE_YELLOW, width=STRUCTURAL_BORDER)
     draw.text((84, 1018), "看到了什么", font=base.ft(32), fill=base.ARCADE_YELLOW)
     _text(draw, (84, 1066), finding["detail"], 28, base.ARCADE_TEXT, 880)
@@ -725,13 +833,21 @@ def _draw_index_label(draw, item):
         draw.arc(marker, 90, 270, fill=colors[0], width=4)
         draw.arc(marker, 270, 450, fill=colors[1], width=4)
     draw.text((tx - 10, ty - 14), item["number"], font=base.ft(21), fill=base.ARCADE_TEXT)
-    anchor_x = lx + 155 if lx < tx else lx - 12
-    if len(colors) == 2:
-        draw.line((anchor_x, ly + 13, tx, ty - 1), fill=colors[0], width=2)
-        draw.line((anchor_x, ly + 15, tx, ty + 1), fill=colors[1], width=2)
+    label_box = item.get("label_box")
+    if label_box:
+        anchor_x, anchor_y = _nearest_box_edge((tx, ty), label_box)
     else:
-        draw.line((anchor_x, ly + 14, tx, ty), fill=primary, width=2)
-    draw.text((lx, ly), f"{item['number']} {item['name']}", font=base.ft(20), fill=primary, stroke_width=1, stroke_fill="#0B1329")
+        anchor_x, anchor_y = (lx + 155 if lx < tx else lx - 12), ly + 14
+    if len(colors) == 2:
+        draw.line((anchor_x, anchor_y - 1, tx, ty - 1), fill=colors[0], width=2)
+        draw.line((anchor_x, anchor_y + 1, tx, ty + 1), fill=colors[1], width=2)
+    else:
+        draw.line((anchor_x, anchor_y, tx, ty), fill=primary, width=2)
+    if label_box:
+        draw.rounded_rectangle(label_box, radius=7, fill=base.ARCADE_BG, outline=primary, width=2)
+        draw.text((label_box[0] + 9, label_box[1] + 7), f"{item['number']} {item['name']}", font=base.ft(item.get("label_font_size", 20)), fill=primary)
+    else:
+        draw.text((lx, ly), f"{item['number']} {item['name']}", font=base.ft(20), fill=primary, stroke_width=1, stroke_fill="#0B1329")
 
 
 def _bench_muscle_annotations(image, target):
@@ -842,6 +958,46 @@ def validate_anatomy_layout(indices, panel):
             raise ValueError(f"anatomy panel label is outside bounds: {item['muscle']}")
 
 
+def _anatomy_occupancy(asset, panel):
+    """Build a local panel mask from the canonical mannequin alpha channel."""
+    width, height = panel[2] - panel[0], panel[3] - panel[1]
+    fitted = ImageOps.contain(asset, (width, height), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (width, height), 0)
+    alpha = fitted.getchannel("A")
+    mask.paste(alpha, ((width - fitted.width) // 2, (height - fitted.height) // 2))
+    return mask.filter(ImageFilter.MaxFilter(17)), fitted
+
+
+def _place_anatomy_labels(indices, occupancy, panel):
+    """Place Page-3 text cards only in transparent space around mannequins."""
+    placed = []
+    for item in indices:
+        copy = dict(item)
+        tx, ty = copy["target"]
+        # Place on the side that keeps the leader short, but always defer to
+        # the no-overlap candidate search.
+        direction = -1 if tx > (panel[0] + panel[2]) / 2 else 1
+        label_box, font_size, _ = _safe_label_box(
+            occupancy, panel, (tx, ty), f"{copy['number']} {copy['name']}", direction,
+        )
+        copy["label_box"] = label_box
+        copy["label"] = (label_box[0] + 9, label_box[1] + 7)
+        copy["label_font_size"] = font_size
+        placed.append(copy)
+    return placed
+
+
+def validate_anatomy_label_clearance(indices, occupancy, panel):
+    """Reject any Page-3 label card that touches the mannequin silhouette."""
+    for item in indices:
+        box = item.get("label_box")
+        if not box:
+            raise ValueError(f"anatomy index lacks an external label box: {item['muscle']}")
+        local = (box[0] - panel[0], box[1] - panel[1], box[2] - panel[0], box[3] - panel[1])
+        if occupancy.crop(local).getbbox() is not None:
+            raise ValueError(f"anatomy label overlaps mannequin: {item['muscle']}")
+
+
 def _deadlift_muscle_annotations(image, target):
     """Keep the pixel mannequins clean: landmarks replace coloured scan boxes."""
     draw = ImageDraw.Draw(image)
@@ -866,7 +1022,7 @@ def _muscle_page(primary, secondary=None):
     # No illustration-card fill: the page grid remains visible behind the
     # extracted mannequins and a rounded purple outline preserves the common HUD grid.
     _transparent_panel(draw, target, base.ARCADE_PURPLE)
-    asset = ImageOps.contain(asset, panel_size, Image.Resampling.LANCZOS)
+    occupancy, asset = _anatomy_occupancy(asset, target)
     asset_x = target[0] + (panel_size[0] - asset.width) // 2
     asset_y = target[1] + (panel_size[1] - asset.height) // 2
     image.paste(asset, (asset_x, asset_y), asset)
@@ -874,6 +1030,8 @@ def _muscle_page(primary, secondary=None):
     validate_anatomy_coverage(indices, primary, secondary)
     validate_anatomy_layout(indices, target)
     validate_anatomy_locations(indices)
+    indices = _place_anatomy_labels(indices, occupancy, target)
+    validate_anatomy_label_clearance(indices, occupancy, target)
     if indices:
         for item in indices:
             _draw_index_label(draw, item)
