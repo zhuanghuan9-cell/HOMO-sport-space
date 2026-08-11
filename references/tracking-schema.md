@@ -17,6 +17,17 @@ radius, action span, sampling rate, and rejection reasons when unavailable.
 Do not manually correct, reuse an old path, or use colour/text/fixed-coordinate
 detection.
 
+`method` records whether a result came from direct
+`circle_ellipse_continuity` or the stricter fallback
+`circle_ellipse_seeded_csrt_continuity`. The latter is only eligible when it
+starts from an automatic rim candidate and independently agrees with rim
+geometry at at least 75% of required phases where such geometry is visible;
+otherwise the entire path remains unavailable.
+
+Pass the already source-bound Swift extraction directory with `--frames-dir`
+whenever it is available. This makes every tracked image exactly match the
+report frame and avoids codec seek differences near a video boundary.
+
 Only an `available` result may be composed into `bar_path`:
 
 ```bash

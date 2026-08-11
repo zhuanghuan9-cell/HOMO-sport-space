@@ -40,10 +40,10 @@ python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
 ```
 
    双机位的第二页可额外传入 `--secondary-pose-tracking`，且它必须与第二条源视频的 SHA-256 完全一致。后方硬拉/深蹲和脚端卧推中的骨架仍仅用于读者查看模型识别结果，不能超出该机位原本的左右同步判断边界。
-6. For a side or oblique view, run the strict automatic near-plate hub tracker before interpreting any bar path. It expands the chosen repetition into ~30fps samples, searches circular **and oblique elliptical** plate-rim/hub candidates, then locks one physical near plate by size and frame-to-frame continuity. It never uses plate colour, lettering, fixed screen coordinates, or manual correction.
+6. For a side or oblique view, run the strict automatic near-plate hub tracker before interpreting any bar path. It expands the chosen repetition into ~30fps samples, searches circular **and oblique elliptical** plate-rim/hub candidates, then locks one physical near plate by size and frame-to-frame continuity. When a rim detector briefly loses a visually clear plate, an automatically candidate-seeded CSRT template tracker may continue following that same image region; it must still pass every coverage, motion, key-phase, and independently detected re-anchor gate. It never uses plate colour, lettering, fixed screen coordinates, or manual correction.
 
 ```bash
-python3 scripts/track_barbell.py --video source.mp4 --phase-tracking tracking.json \
+python3 scripts/track_barbell.py --video source.mp4 --frames-dir frames --phase-tracking tracking.json \
   --output bar-tracking.json
 python3 scripts/compose_bar_tracking.py --tracking tracking.json \
   --bar-tracking bar-tracking.json --output report-safe.json

@@ -74,7 +74,7 @@ def detect_candidates(frame: np.ndarray) -> list[Candidate]:
     edges = cv2.Canny(gray, 70, 160)
     circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=max(40, min(width, height) // 10),
                                param1=100, param2=30, minRadius=max(20, min(width, height) // 28),
-                               maxRadius=max(35, min(width, height) // 4))
+                               maxRadius=max(35, min(width, height) // 2))
     candidates = []
     for x, y, radius in circles[0] if circles is not None else []:
         source_x, source_y, source_radius = float(x / scale), float(y / scale), float(radius / scale)
@@ -83,7 +83,7 @@ def detect_candidates(frame: np.ndarray) -> list[Candidate]:
         mask = np.zeros_like(gray)
         cv2.circle(mask, (round(x), round(y)), max(1, round(radius)), 255, 3)
         edge_ratio = float((edges[mask > 0] > 0).mean()) if np.any(mask > 0) else 0.0
-        if edge_ratio >= .16:
+        if edge_ratio >= .08:
             candidates.append(Candidate(source_x, source_y, source_radius, edge_ratio, "hough_circle"))
     # A plate filmed from a slightly oblique angle is an ellipse, not a true
     # circle.  Recover its geometric centre from a fitted rim contour instead
@@ -100,7 +100,7 @@ def detect_candidates(frame: np.ndarray) -> list[Candidate]:
         mask = np.zeros_like(gray)
         cv2.ellipse(mask, ((round(x), round(y)), (round(axis_a), round(axis_b)), 0), 255, 2)
         edge_ratio = float((edges[mask > 0] > 0).mean()) if np.any(mask > 0) else 0.0
-        if edge_ratio >= .20:
+        if edge_ratio >= .10:
             candidate = Candidate(float(x / scale), float(y / scale), float((minor / 2) / scale), edge_ratio, "ellipse_rim")
             if not any(math.hypot(candidate.x - old.x, candidate.y - old.y) < max(12, candidate.radius * .25) for old in candidates):
                 candidates.append(candidate)
@@ -178,6 +178,73 @@ def best_track(candidates_by_frame: list[list[Candidate]]) -> list[Candidate | N
     return min(choices, key=lambda item: item[0])[1]
 
 
+def template_tracks(frames: list[np.ndarray | None], candidates_by_frame: list[list[Candidate]]) -> list[list[Candidate | None]]:
+    """Track candidate-seeded plate templates through rim-detector dropouts.
+
+    CSRT is not a manual correction or a coordinate guess: each result comes
+    from the next source frame's visual template match.  It is used only after
+    circle/ellipse continuity has failed, and it still must pass every normal
+    geometry, movement, coverage and critical-phase gate below.
+    """
+    if not frames or frames[0] is None or not hasattr(cv2, "TrackerCSRT_create"):
+        return []
+    seeds = sorted(
+        (candidate for candidate in candidates_by_frame[0] if 35 <= candidate.radius <= 180),
+        key=lambda candidate: candidate.score,
+        reverse=True,
+    )[:8]
+    results = []
+    height, width = frames[0].shape[:2]
+    for seed in seeds:
+        side = min(seed.radius * 2.4, width, height)
+        x = min(max(seed.x - side / 2, 0), width - side)
+        y = min(max(seed.y - side / 2, 0), height - side)
+        tracker = cv2.TrackerCSRT_create()
+        initialized = tracker.init(frames[0], (round(x), round(y), round(side), round(side)))
+        if initialized is False:
+            continue
+        sequence: list[Candidate | None] = [Candidate(seed.x, seed.y, seed.radius, seed.score, "csrt_plate_template")]
+        for frame in frames[1:]:
+            if frame is None:
+                sequence.append(None)
+                continue
+            ok, box = tracker.update(frame)
+            if not ok:
+                sequence.append(None)
+                continue
+            bx, by, bw, bh = box
+            sequence.append(Candidate(float(bx + bw / 2), float(by + bh / 2), float(min(bw, bh) / 2), seed.score, "csrt_plate_template"))
+        results.append(sequence)
+    return results
+
+
+def best_template_track(frames: list[np.ndarray | None], candidates_by_frame: list[list[Candidate]], samples: list[dict], required_frames: set[int]) -> list[Candidate | None]:
+    choices = []
+    for track in template_tracks(frames, candidates_by_frame):
+        if validate_track(track, samples, required_frames):
+            continue
+        # Re-anchor the visual tracker whenever circle/ellipse evidence is
+        # available at a required phase.  A template that drifts onto a torso
+        # or rack will fail this independently detected geometry agreement.
+        checks = 0
+        matches = 0
+        for index, sample in enumerate(samples):
+            if sample["frame"] not in required_frames or track[index] is None or not candidates_by_frame[index]:
+                continue
+            checks += 1
+            nearest = min(math.hypot(candidate.x - track[index].x, candidate.y - track[index].y) for candidate in candidates_by_frame[index])
+            if nearest <= max(45, track[index].radius * .6):
+                matches += 1
+        if checks < 3 or matches / checks < .75:
+            continue
+        values = [point for point in track if point]
+        vertical_range = max(point.y for point in values) - min(point.y for point in values)
+        # Prefer the continuously tracked candidate that exhibits the expected
+        # non-static lift movement.  Validation has already rejected jumps.
+        choices.append((-vertical_range, track))
+    return min(choices, key=lambda item: item[0])[1] if choices else [None] * len(samples)
+
+
 def _longest_gap(points: list[Candidate | None]) -> int:
     longest = current = 0
     for point in points:
@@ -209,7 +276,7 @@ def validate_track(points: list[Candidate | None], samples: list[dict], required
     displacements = [(b_index - a_index, math.hypot(b.x - a.x, b.y - a.y)) for (a_index, a), (b_index, b) in zip(indexed, indexed[1:])]
     if displacements and any(distance > max(80 * delta, median_radius * 1.5 * delta) for delta, distance in displacements):
         reasons.append("相邻关键阶段出现不连续跳变")
-    if float(np.mean([point.score for point in values])) < .18:
+    if float(np.mean([point.score for point in values])) < .09:
         reasons.append("圆形边缘证据不足，可能不是杠片轴心")
     # A static circle is more likely background equipment than the working bar.
     if max((point.y for point in values), default=0) - min((point.y for point in values), default=0) < max(12, median_radius * .20):
@@ -242,10 +309,19 @@ def display_points(raw: list[Candidate | None], samples: list[dict]) -> list[dic
     return output
 
 
+def extracted_frame(frames_dir: Path, frame: int) -> np.ndarray | None:
+    """Read the exact already-extracted source frame, never a seek estimate."""
+    matches = sorted(frames_dir.glob(f"frame_{frame:04d}_*"))
+    if not matches:
+        return None
+    return cv2.imread(str(matches[0]), cv2.IMREAD_COLOR)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Strict automatic near-plate hub tracker")
     parser.add_argument("--video", required=True, type=Path)
     parser.add_argument("--phase-tracking", required=True, type=Path, help="Tracking JSON used only for frame/time phases")
+    parser.add_argument("--frames-dir", type=Path, help="Optional exact Swift-extracted frames; preferred over codec seeking")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     source = json.loads(args.phase_tracking.read_text(encoding="utf-8"))
@@ -253,25 +329,41 @@ def main() -> int:
     fps = float(capture.get(cv2.CAP_PROP_FPS)) or 30.0
     width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     samples, required_frames, action_span = action_samples(source, fps)
-    # Decode the action span once in chronological order; seeking separately
-    # for every 30fps sample is much slower and can produce codec-dependent
-    # off-by-one frames.
-    wanted = {sample["frame"] for sample in samples}
     candidates_for_frame = {}
-    capture.set(cv2.CAP_PROP_POS_FRAMES, samples[0]["frame"] if samples else 0)
-    frame_number = samples[0]["frame"] if samples else 0
-    end_frame = samples[-1]["frame"] if samples else -1
-    while frame_number <= end_frame:
-        ok, frame = capture.read()
-        if not ok:
-            break
-        if frame_number in wanted:
-            candidates_for_frame[frame_number] = detect_candidates(frame)
-        frame_number += 1
+    frames_for_frame = {}
+    if args.frames_dir:
+        if not args.frames_dir.is_dir():
+            parser.error(f"frames directory not found: {args.frames_dir}")
+        for sample in samples:
+            frame = extracted_frame(args.frames_dir, sample["frame"])
+            frames_for_frame[sample["frame"]] = frame
+            candidates_for_frame[sample["frame"]] = detect_candidates(frame) if frame is not None else []
+    else:
+        # Decode the action span once in chronological order; seeking
+        # separately for every 30fps sample is much slower and codec-dependent.
+        wanted = {sample["frame"] for sample in samples}
+        capture.set(cv2.CAP_PROP_POS_FRAMES, samples[0]["frame"] if samples else 0)
+        frame_number = samples[0]["frame"] if samples else 0
+        end_frame = samples[-1]["frame"] if samples else -1
+        while frame_number <= end_frame:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame_number in wanted:
+                frames_for_frame[frame_number] = frame
+                candidates_for_frame[frame_number] = detect_candidates(frame)
+            frame_number += 1
     candidates_by_frame = [candidates_for_frame.get(sample["frame"], []) for sample in samples]
+    source_frames = [frames_for_frame.get(sample["frame"]) for sample in samples]
     capture.release()
     track = best_track(candidates_by_frame)
     reasons = validate_track(track, samples, required_frames)
+    method = "circle_ellipse_continuity"
+    if reasons:
+        template = best_template_track(source_frames, candidates_by_frame, samples, required_frames)
+        template_reasons = validate_track(template, samples, required_frames)
+        if not template_reasons:
+            track, reasons, method = template, [], "circle_ellipse_seeded_csrt_continuity"
     status = "available" if not reasons else "unavailable"
     points = []
     for sample, point in zip(samples, track):
@@ -281,7 +373,7 @@ def main() -> int:
     payload = {
         "schema_version": 1,
         "source_video": {"sha256": sha256(args.video), "filename": args.video.name, "image_size": [width, height], "fps": fps},
-        "bar_tracking": {"status": status, "anchor": "near_plate_hub", "method": "hough_circle_continuity", "sample_rate_fps": round(fps / action_span.get("sample_step_frames", 1), 2) if action_span else 0, "action_span": action_span, "raw_points": points if status == "available" else [], "display_points": display_points(track, samples) if status == "available" else [], "rejection_reasons": reasons, "phase_count": len(required_frames)},
+        "bar_tracking": {"status": status, "anchor": "near_plate_hub", "method": method, "sample_rate_fps": round(fps / action_span.get("sample_step_frames", 1), 2) if action_span else 0, "action_span": action_span, "raw_points": points if status == "available" else [], "display_points": display_points(track, samples) if status == "available" else [], "rejection_reasons": reasons, "phase_count": len(required_frames)},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
