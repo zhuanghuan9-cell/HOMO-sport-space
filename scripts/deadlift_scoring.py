@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Conservative conventional-deadlift quality scoring.
+"""Practical deadlift quality scoring for ordinary side + front/rear videos.
 
-This module deliberately returns ``scorable=False`` instead of inventing a
-number whenever a required camera, tracked bar, or trusted pose landmark is
-missing.  Scores are internal evidence; the renderer only exposes the total
-and grade on Page 4.
+Hard evidence is always preferred.  When a single pose item is obscured, only
+that rule receives an explicit 80%-weight neutral baseline; the report never
+pretends that an invisible joint was directly observed.
 """
 from __future__ import annotations
 
@@ -28,19 +27,22 @@ CORE_RULES = {"DL-01", "DL-02", "DL-03"}
 LIMITATION = "仅基于当前双机位的二维视频趋势，不代表比赛裁判或医疗判断。"
 
 
-def _item(rule_id, title, status, score, detail, frames=(), metrics=None):
+def _item(rule_id, title, status, score, detail, frames=(), metrics=None, source="直接证据", neutral_reason=None):
     return {
         "id": rule_id, "title": title, "max_score": WEIGHTS[rule_id],
         "score": score, "status": status, "detail": detail,
         "evidence_frames": list(frames), "metrics": metrics or {},
-        "limitation": LIMITATION,
+        "limitation": LIMITATION, "source": source, "neutral_reason": neutral_reason,
     }
 
 
-def _nearest_pose_frame(pose, frame):
+def _nearest_pose_frame(pose, frame, max_gap=6):
     frames = (pose or {}).get("frames") or []
     candidates = [sample for sample in frames if isinstance(sample.get("frame"), int)]
-    return min(candidates, key=lambda sample: abs(sample["frame"] - frame)) if candidates else None
+    nearest = min(candidates, key=lambda sample: abs(sample["frame"] - frame)) if candidates else None
+    if nearest is None or abs(nearest["frame"] - frame) > max_gap:
+        return None
+    return nearest
 
 
 def _joint(sample, name):
@@ -52,13 +54,21 @@ def _joint(sample, name):
     return float(value["x"]), float(value["y"])
 
 
-def _side_chain(pose, frame):
+def _side_points(pose, frame, names):
     sample = _nearest_pose_frame(pose, frame)
     for side in ("left", "right"):
-        points = [_joint(sample, f"{side}_{name}") for name in ("shoulder", "hip", "knee", "ankle")]
+        points = [_joint(sample, f"{side}_{name}") for name in names]
         if all(points):
             return points
     return None
+
+
+def _neutral_item(rule_id, title, reason, frames=()):
+    return _item(
+        rule_id, title, "中性基准", round(WEIGHTS[rule_id] * .80),
+        "当前视频未能可靠看清这一项，按中性基准计入，不作为动作问题。",
+        frames, {"中性基准比例": 80}, "中性基准", reason,
+    )
 
 
 def _angle(a, b, c):
@@ -87,19 +97,19 @@ def _status_for_three_band(value, stable, mild, weight, title, stable_detail, mi
 def _grade(total, items):
     statuses = {item["status"] for item in items}
     clear_core = any(item["id"] in CORE_RULES and item["status"] == "明显待改善" for item in items)
-    if clear_core:
-        return "A"
     if total >= 95 and statuses == {"稳定"}:
-        return "SS"
-    if total >= 90:
-        return "S"
-    if total >= 80:
-        return "A"
-    if total >= 70:
-        return "B"
-    if total >= 60:
-        return "C"
-    return "D"
+        grade = "SS"
+    elif total >= 90:
+        grade = "S"
+    elif total >= 80:
+        grade = "A"
+    elif total >= 70:
+        grade = "B"
+    elif total >= 60:
+        grade = "C"
+    else:
+        grade = "D"
+    return "A" if clear_core and grade in {"SS", "S"} else grade
 
 
 def _unavailable(reason):
@@ -114,35 +124,28 @@ def score_deadlift(side, rear, side_pose, rear_pose):
     """Score one conventional, reset deadlift only when every evidence gate passes."""
     if not side or not rear or side.get("exercise") != "deadlift" or rear.get("exercise") != "deadlift":
         return _unavailable("需要同一组传统硬拉的侧面与后方视频。")
-    if side.get("view") not in {"side", "oblique_side"} or rear.get("view") != "rear":
-        return _unavailable("需要侧面／斜侧面与后方双机位。")
+    if side.get("view") not in {"side", "oblique_side"} or rear.get("view") not in {"front", "rear"}:
+        return _unavailable("需要侧面／斜侧面与前方或后方双机位。")
     variation = ((side.get("render") or {}).get("deadlift_variation"))
-    if variation != "conventional":
+    if variation and variation != "conventional":
         return _unavailable("当前仅评分常规单次硬拉；暂停或其他变式暂不评分。")
     execution = ((side.get("render") or {}).get("deadlift_execution"))
-    if execution != "reset_single":
+    if execution and execution != "reset_single":
         return _unavailable("当前仅评分每次落地重置的常规单次硬拉。")
     bar_tracking = side.get("bar_tracking") or {}
     raw = bar_tracking.get("raw_points") or []
     if bar_tracking.get("status") != "available" or len(raw) < 3:
         return _unavailable("侧面杠铃轨迹不可靠，无法完成评分。")
-    side_rep = (side.get("repetitions") or [{}])[-1]
     rear_evidence = ((rear.get("render") or {}).get("rear_bar_level_evidence") or {})
     if not all(stage in rear_evidence for stage in ("reference", "ascent")):
         return _unavailable("后方左右杠铃端点证据不足，无法完成评分。")
     first, last = raw[0], raw[-1]
-    initial_chain = _side_chain(side_pose, int(first["frame"]))
-    early_chain = _side_chain(side_pose, int(raw[min(1, len(raw) - 1)]["frame"]))
-    lockout_chain = _side_chain(side_pose, int(last["frame"]))
-    if not initial_chain or not early_chain or not lockout_chain:
-        return _unavailable("侧面姿态关键点不足，无法完成评分。")
-    rear_sample = _nearest_pose_frame(rear_pose, int(rear_evidence["reference"]["frame"]))
-    rear_joints = [_joint(rear_sample, name) for name in (
-        "left_shoulder", "right_shoulder", "left_hip", "right_hip",
-        "left_knee", "right_knee", "left_ankle", "right_ankle",
-    )]
-    if not all(rear_joints):
-        return _unavailable("后方姿态关键点不足，无法完成评分。")
+    early_frame = int(raw[min(1, len(raw) - 1)]["frame"])
+    initial_trunk = _side_points(side_pose, int(first["frame"]), ("shoulder", "hip"))
+    early_trunk = _side_points(side_pose, early_frame, ("shoulder", "hip"))
+    initial_hip_knee = _side_points(side_pose, int(first["frame"]), ("hip", "knee"))
+    early_hip = _side_points(side_pose, early_frame, ("hip",))
+    lockout_chain = _side_points(side_pose, int(last["frame"]), ("shoulder", "hip", "knee", "ankle"))
 
     plate = float(side.get("plate_diameter_px") or 0)
     if plate <= 0:
@@ -154,48 +157,63 @@ def score_deadlift(side, rear, side_pose, rear_pose):
         (first["frame"], last["frame"]), "最大横向漂移_杠片直径百分比",
     )
 
-    trunk_change = abs(_torso_angle(early_chain) - _torso_angle(initial_chain))
-    spine_item = _status_for_three_band(
-        trunk_change, 8, 15, WEIGHTS["DL-02"], ("DL-02", "脊柱稳定"),
-        "离地初段躯干角保持稳定。", "离地初段出现轻微躯干角调整。", "离地初段躯干角变化较大。",
-        (first["frame"], raw[min(1, len(raw) - 1)]["frame"]), "离地初段躯干角变化_度",
-    )
+    if initial_trunk and early_trunk:
+        trunk_change = abs(_torso_angle(early_trunk) - _torso_angle(initial_trunk))
+        spine_item = _status_for_three_band(
+            trunk_change, 8, 15, WEIGHTS["DL-02"], ("DL-02", "脊柱稳定"),
+            "离地初段躯干角保持稳定。", "离地初段出现轻微躯干角调整。", "离地初段躯干角变化较大。",
+            (first["frame"], early_frame), "离地初段躯干角变化_度",
+        )
+    else:
+        spine_item = _neutral_item("DL-02", "脊柱稳定", "离地初段肩髋关键点受遮挡或置信度不足。", (first["frame"], early_frame))
 
     # Image y grows downward.  Hip must appear above the knee, and it must
     # not rise before a meaningful amount of bar movement has occurred.
-    hip_above_knee = initial_chain[1][1] < initial_chain[2][1]
-    hip_rise = initial_chain[1][1] - early_chain[1][1]
-    bar_rise = float(first["y"]) - float(raw[min(1, len(raw) - 1)]["y"])
-    early_ratio = max(0, hip_rise - bar_rise) / plate * 100
-    if hip_above_knee and early_ratio <= 1:
-        hip_item = _item("DL-03", "髋膝关系", "稳定", 20, "准备位与离地初段的肩髋配合稳定。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
-    elif hip_above_knee and early_ratio <= 2:
-        hip_item = _item("DL-03", "髋膝关系", "轻微待改善", 14, "离地前出现轻微重新找位。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
+    if initial_hip_knee and early_hip:
+        hip_above_knee = initial_hip_knee[0][1] < initial_hip_knee[1][1]
+        hip_rise = initial_hip_knee[0][1] - early_hip[0][1]
+        bar_rise = float(first["y"]) - float(raw[min(1, len(raw) - 1)]["y"])
+        early_ratio = max(0, hip_rise - bar_rise) / plate * 100
+        if hip_above_knee and early_ratio <= 1:
+            hip_item = _item("DL-03", "髋膝关系", "稳定", 20, "准备位与离地初段的肩髋配合稳定。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
+        elif hip_above_knee and early_ratio <= 2:
+            hip_item = _item("DL-03", "髋膝关系", "轻微待改善", 14, "离地前出现轻微重新找位。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
+        else:
+            hip_item = _item("DL-03", "髋膝关系", "明显待改善", 6, "杠铃仍接近地面时，髋部先出现明显上移。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
     else:
-        hip_item = _item("DL-03", "髋膝关系", "明显待改善", 6, "杠铃仍接近地面时，髋部先出现明显上移。", (first["frame"], raw[1]["frame"]), {"髋部提前上移_杠片直径百分比": round(early_ratio, 3)})
+        hip_item = _neutral_item("DL-03", "髋膝关系", "离地前髋或膝关键点被杠片遮挡。", (first["frame"], early_frame))
 
     reference, ascent = rear_evidence["reference"], rear_evidence["ascent"]
     def tilt(stage):
         left, right = stage["screen_left"], stage["screen_right"]
         return math.degrees(math.atan2(float(right["y"]) - float(left["y"]), float(right["x"]) - float(left["x"])))
     tilt_change = abs(tilt(ascent) - tilt(reference))
-    shoulder_delta = abs(rear_joints[0][1] - rear_joints[1][1])
-    hip_delta = abs(rear_joints[2][1] - rear_joints[3][1])
-    symmetry_value = max(tilt_change, shoulder_delta / plate * 100, hip_delta / plate * 100)
+    rear_sample = _nearest_pose_frame(rear_pose, int(rear_evidence["reference"]["frame"]))
+    shoulder_points = [_joint(rear_sample, name) for name in ("left_shoulder", "right_shoulder")]
+    hip_points = [_joint(rear_sample, name) for name in ("left_hip", "right_hip")]
+    pose_symmetry = []
+    if all(shoulder_points):
+        pose_symmetry.append(abs(shoulder_points[0][1] - shoulder_points[1][1]) / plate * 100)
+    if all(hip_points):
+        pose_symmetry.append(abs(hip_points[0][1] - hip_points[1][1]) / plate * 100)
+    symmetry_value = max([tilt_change, *pose_symmetry])
     symmetry_item = _status_for_three_band(
         symmetry_value, 2, 4, WEIGHTS["DL-04"], ("DL-04", "左右对称"),
         "后方两端高度与身体左右趋势稳定。", "后方出现轻微左右高度或同步差。", "后方出现持续明显左右不同步趋势。",
         (reference["frame"], ascent["frame"]), "左右不对称综合指标",
     )
 
-    hip_angle = _angle(lockout_chain[0], lockout_chain[1], lockout_chain[2])
-    knee_angle = _angle(lockout_chain[1], lockout_chain[2], lockout_chain[3])
-    lockout_angle = min(hip_angle or 0, knee_angle or 0)
-    lockout_item = _status_for_three_band(
-        180 - lockout_angle, 15, 25, WEIGHTS["DL-05"], ("DL-05", "锁定完成度"),
-        "锁定时髋膝接近伸直，杠铃稳定。", "锁定接近完成，但姿势仍可更干净。", "锁定完成度不足或存在明显后仰趋势。",
-        (last["frame"],), "距伸直差_度",
-    )
+    if lockout_chain:
+        hip_angle = _angle(lockout_chain[0], lockout_chain[1], lockout_chain[2])
+        knee_angle = _angle(lockout_chain[1], lockout_chain[2], lockout_chain[3])
+        lockout_angle = min(hip_angle or 0, knee_angle or 0)
+        lockout_item = _status_for_three_band(
+            180 - lockout_angle, 15, 25, WEIGHTS["DL-05"], ("DL-05", "锁定完成度"),
+            "锁定时髋膝接近伸直，杠铃稳定。", "锁定接近完成，但姿势仍可更干净。", "锁定完成度不足或存在明显后仰趋势。",
+            (last["frame"],), "距伸直差_度",
+        )
+    else:
+        lockout_item = _neutral_item("DL-05", "锁定完成度", "锁定帧姿态关键点未被可靠覆盖。", (last["frame"],))
 
     y_values = [float(point["y"]) for point in raw]
     reversals = sum(1 for previous, current in zip(y_values, y_values[1:]) if current > previous + plate * .01)
@@ -219,7 +237,7 @@ def _load(path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Strict conventional-deadlift AI score")
+    parser = argparse.ArgumentParser(description="Practical side + front/rear deadlift AI score")
     parser.add_argument("--side", type=Path, required=True)
     parser.add_argument("--rear", type=Path, required=True)
     parser.add_argument("--side-pose", type=Path, required=True)

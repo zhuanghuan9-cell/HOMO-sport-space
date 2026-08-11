@@ -82,24 +82,31 @@ class DeadliftScoringTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["status"], "明显待改善")
         self.assertEqual(result["grade"], "A")
 
-    def test_missing_side_pose_refuses_total_score(self):
+    def test_core_issue_caps_an_high_score_but_never_upgrades_a_low_score(self):
+        result = scoring.score_deadlift(side_data((100, 114, 116, 118)), rear_data(), None, rear_pose())
+        self.assertTrue(result["scorable"])
+        self.assertEqual(result["total"], 75)
+        self.assertEqual(result["grade"], "B")
+
+    def test_missing_side_pose_uses_neutral_scores_instead_of_refusing_total(self):
         result = scoring.score_deadlift(side_data(), rear_data(), None, rear_pose())
-        self.assertFalse(result["scorable"])
-        self.assertIsNone(result["total"])
-        self.assertIsNone(result["grade"])
-        self.assertIn("侧面姿态", result["unavailable_reason"])
+        self.assertTrue(result["scorable"])
+        self.assertEqual(result["total"], 89)
+        self.assertEqual(result["grade"], "A")
+        neutral_ids = {item["id"] for item in result["items"] if item["source"] == "中性基准"}
+        self.assertEqual(neutral_ids, {"DL-02", "DL-03", "DL-05"})
 
     def test_non_conventional_variation_refuses_total_score(self):
         result = scoring.score_deadlift(side_data(variation="pause"), rear_data(), side_pose(), rear_pose())
         self.assertFalse(result["scorable"])
         self.assertIn("常规单次", result["unavailable_reason"])
 
-    def test_unknown_variation_refuses_total_score(self):
+    def test_unlabelled_regular_deadlift_is_scoreable(self):
         side = side_data()
         side["render"].pop("deadlift_variation")
         result = scoring.score_deadlift(side, rear_data(), side_pose(), rear_pose())
-        self.assertFalse(result["scorable"])
-        self.assertIsNone(result["total"])
+        self.assertTrue(result["scorable"])
+        self.assertEqual(result["total"], 100)
 
     def test_missing_rear_level_evidence_refuses_total_score(self):
         rear = rear_data()
@@ -114,6 +121,19 @@ class DeadliftScoringTests(unittest.TestCase):
         result = scoring.score_deadlift(side, rear_data(), side_pose(), rear_pose())
         self.assertFalse(result["scorable"])
         self.assertIn("落地重置", result["unavailable_reason"])
+
+    def test_rear_pose_missing_keeps_bar_end_symmetry_as_direct_evidence(self):
+        result = scoring.score_deadlift(side_data(), rear_data(), side_pose(), None)
+        self.assertTrue(result["scorable"])
+        symmetry = next(item for item in result["items"] if item["id"] == "DL-04")
+        self.assertEqual(symmetry["source"], "直接证据")
+        self.assertEqual(symmetry["score"], 15)
+
+    def test_front_view_is_accepted_for_bilateral_bar_level_evidence(self):
+        front = rear_data()
+        front["view"] = "front"
+        result = scoring.score_deadlift(side_data(), front, side_pose(), rear_pose())
+        self.assertTrue(result["scorable"])
 
     def test_score_items_include_traceability_not_public_subscores(self):
         result = scoring.score_deadlift(side_data(), rear_data(), side_pose(), rear_pose())

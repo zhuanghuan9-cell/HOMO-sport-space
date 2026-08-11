@@ -79,10 +79,9 @@ python3 scripts/render_cards_v3.py --tracking side.json --frames-dir side-frames
 
 ### Conventional-deadlift AI score V1
 
-Only a **traditional conventional, reset single deadlift** with a source-bound
-side/oblique-side video **and** rear video is eligible. Run it after strict
-bar and RTMPose tracking, then pass the same verified tracking files to the
-renderer:
+Use a source-bound side/oblique-side video **and** front/rear video. Run the
+score after strict bar tracking and any available RTMPose tracking, then pass
+the same verified tracking files to the renderer:
 
 ```bash
 python3 scripts/deadlift_scoring.py \
@@ -91,11 +90,13 @@ python3 scripts/deadlift_scoring.py \
   --output work/deadlift-score.json
 ```
 
-`render.deadlift_variation` must explicitly equal `conventional` and
-`render.deadlift_execution` must explicitly equal `reset_single`; pause,
-deficit, sumo, touch-and-go, unlabelled, or incomplete clips are not scored.
-Every required bar, phase, and pose gate must be available. Otherwise show
-`当前视频不足以完成完整评分`, no number, no grade, and no training prescription.
+An explicitly detected pause, deficit, sumo, or touch-and-go variation is not
+scored. Unlabelled ordinary video remains eligible. A usable side bar path and
+the bilateral front/rear endpoint evidence remain mandatory; a hidden or
+low-confidence individual pose landmark does **not** reject the whole score.
+That rule receives an 80%-weight `中性基准` instead, with no related muscle
+claim or drill. Only missing camera classes, unreliable side bar tracking, or
+an explicit unsupported variation show `当前视频不足以完成完整评分`.
 
 The internal audit contains six traceable rules; public cards never show their
 subscores, raw metrics, or “deduction” wording:
@@ -107,7 +108,9 @@ subscores, raw metrics, or “deduction” wording:
 - `DL-05` 锁定完成度 15
 - `DL-06` 动作流畅度 10
 
-Only **Page 4** renders the total and one `SS / S / A / B / C / D` badge.
+Only **Page 4** renders the total and one `SS / S / A / B / C / D` badge. If
+neutral baseline was used, Page 4 states that some joints were obscured and
+were not directly scored; Pages 1–3 still never show scores.
 `SS` requires 95–100 with no issue; `S` is 90–94 without a clear core issue;
 `A` is 80–89 or the ceiling after a clear core issue; `B` 70–79, `C` 60–69,
 and `D` below 60. This is a conservative 2D quality review, not a competition

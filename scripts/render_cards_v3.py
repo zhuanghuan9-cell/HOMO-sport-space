@@ -1193,18 +1193,21 @@ def _score_summary(score):
     """Turn traceable internal items into the three reader-facing rows."""
     items = score.get("items") or []
     good = [item["title"] for item in items if item.get("status") == "稳定"]
-    improve = [item for item in items if item.get("status") != "稳定"]
+    improve = [item for item in items if item.get("status") in {"轻微待改善", "明显待改善"}]
+    neutral = [item["title"] for item in items if item.get("source") == "中性基准" or item.get("status") == "中性基准"]
     if not improve:
         return (
-            "六项证据均通过当前二维评分门槛。",
+            "六项中可见项通过当前二维评分门槛。" if neutral else "六项证据均通过当前二维评分门槛。",
             "、".join(good[:3]) or "动作控制稳定",
             "本次未发现需要优先纠正的评分项。",
+            f"部分关节受遮挡：{'、'.join(neutral)}未直接评分，按中性基准计入。" if neutral else "",
         )
     strongest = next((item for item in improve if item.get("status") == "明显待改善"), improve[0])
     return (
         f"主要需要复查：{strongest['title']}。",
         "、".join(good[:2]) or "已完成的动作环节可保持",
         "；".join(f"{item['title']}：{item['detail']}" for item in improve[:2]),
+        f"部分关节受遮挡：{'、'.join(neutral)}按中性基准计入。" if neutral else "",
     )
 
 
@@ -1255,10 +1258,12 @@ def _deadlift_score_page(primary, secondary, score):
     _score_badge(draw, (814, 346), grade)
     draw.text((738, 490), f"评级：{grade}", font=base.ft(31), fill=base.ARCADE_YELLOW)
     draw.line((82, 526, 998, 526), fill="#59647C", width=2)
-    headline, good, improve = _score_summary(score)
+    headline, good, improve, neutral = _score_summary(score)
     _text(draw, (116, 552), headline, 29, base.ARCADE_TEXT, 830)
     _text(draw, (116, 610), f"做得好：{good}", 25, base.ARCADE_CYAN, 830)
     _text(draw, (116, 664), f"待改善：{improve}", 24, base.ARCADE_PINK, 830)
+    if neutral:
+        _text(draw, (116, 704), neutral, 18, base.ARCADE_MUTED, 830)
     draw.text((52, 748), "下一次训练建议", font=base.ft(34), fill=base.ARCADE_YELLOW)
     if _report_is_stable(primary, secondary):
         # A fully stable scored report never receives filler prescriptions.

@@ -45,6 +45,18 @@ class DeadliftScorePageTests(unittest.TestCase):
         self.assertEqual(image.size, (1080, 1440))
         self.assertEqual(called, [])
 
+    def test_score_summary_separates_neutral_baseline_from_improvements(self):
+        summary = renderer._score_summary({"items": [
+            {"title": "杠铃轨迹", "status": "稳定", "detail": "稳定。"},
+            {"title": "髋膝关系", "status": "中性基准", "detail": "不应显示为待改善。"},
+        ]})
+        self.assertEqual(len(summary), 4)
+        headline, good, improve, neutral = summary
+        self.assertIn("可见项", headline)
+        self.assertEqual(good, "杠铃轨迹")
+        self.assertIn("未直接评分", neutral)
+        self.assertIn("未发现", improve)
+
 
 if __name__ == "__main__":
     unittest.main()
