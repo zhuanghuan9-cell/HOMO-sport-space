@@ -58,6 +58,40 @@ def test_candidate_continuity():
     assert not tracker.validate_track(result, samples, {10, 20, 30})
 
 
+def test_squat_requires_only_semantic_reanchors_not_every_legacy_sample():
+    data = source()
+    data["repetitions"][0]["bar_path"] = [
+        {"frame": frame, "time": frame / 30, "x": 300, "y": 400, "phase": phase}
+        for frame, phase in ((10, "start"), (12, "descent"), (14, "descent"), (20, "bottom"),
+                             (22, "ascent"), (24, "ascent"), (30, "lockout"))
+    ]
+    _, required, _ = tracker.action_samples(data, 30)
+    assert required == {10, 20, 22, 30}
+
+
+def test_semantic_reanchors_accept_nearby_real_frame_not_every_legacy_tick():
+    samples = [{"frame": frame} for frame in (10, 12, 20, 22, 30, 38)]
+    points = [None, candidate(100, 210), candidate(100, 260), None, candidate(100, 230), candidate(100, 200)]
+    # Frame 12 is a real nearby start re-anchor for semantic frame 10; the
+    # absent legacy tick at 22 must not invalidate an otherwise verified rep.
+    assert tracker.semantic_reanchors_present(points, samples, {10, 20, 22, 30})
+    rows = [[candidate(100, 210)] if point else [] for point in points]
+    assert 12 in tracker.semantic_reanchor_frames(points, samples, {10, 20, 22, 30}, rows)
+
+
+def test_working_plate_association_rejects_static_plate_far_from_lifter():
+    rows = [
+        [candidate(210, 200), candidate(680, 650)],
+        [candidate(210, 260), candidate(680, 650)],
+        [candidate(210, 210), candidate(680, 650)],
+    ]
+    anchors = [tracker.PoseAnchor(190, 220, 120), tracker.PoseAnchor(190, 280, 120), tracker.PoseAnchor(190, 230, 120)]
+    filtered, audit = tracker.associate_working_candidates(rows, anchors)
+    assert all(len(row) == 1 for row in filtered)
+    assert [row[0].x for row in filtered] == [210, 210, 210]
+    assert all(item["candidate_count"] == 1 for item in audit)
+
+
 def test_reject_static_background():
     points = [candidate(500, 100), candidate(500, 101), candidate(500, 100)]
     reasons = tracker.validate_track(points, [{"frame": frame} for frame in (10, 20, 30)], {10, 20, 30})

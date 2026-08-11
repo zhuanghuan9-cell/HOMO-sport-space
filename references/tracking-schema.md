@@ -17,11 +17,13 @@ radius, action span, sampling rate, and rejection reasons when unavailable.
 Do not manually correct, reuse an old path, or use colour/text/fixed-coordinate
 detection.
 
+深蹲侧面／斜侧面可传入同源 `--pose-tracking`，作为**工作杠片关联**信号：肩／髋点只建立躯干相对范围，用来排除静止停放杠片、架孔与背景圆形候选，绝不提供杠铃坐标。`working_plate_association` 记录姿态锚点覆盖率与逐帧候选审计；每个 `raw_point.working_plate` 记录检测来源、相对肩部的归一化距离、相对连续性与语义阶段重锚状态。深蹲只要求在 `start/bottom/early-ascent/lockout` 附近完成真实重锚，不要求旧版每个时间点都检测成功。拒绝原因必须区分未找到工作杠片、候选跳向停放／背景器械、关键阶段遮挡与原始点覆盖不足。
+
 `method` records whether a result came from direct
 `circle_ellipse_continuity` or the stricter fallback
 `circle_ellipse_seeded_csrt_continuity`. The latter is only eligible when it
 starts from an automatic rim candidate and independently agrees with rim
-geometry at at least 75% of required phases where such geometry is visible;
+geometry at each required semantic re-anchor where such geometry is visible;
 otherwise the entire path remains unavailable.
 
 Pass the already source-bound Swift extraction directory with `--frames-dir`

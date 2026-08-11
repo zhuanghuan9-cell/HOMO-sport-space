@@ -8,6 +8,8 @@
 
 The bar-plus-lifter system is usually organized over the base of support, but body proportions, bar position, stance, footwear, and camera parallax change the visible path. “Perfectly vertical” is not required frame by frame.
 
+若同一侧面画面中有停放杠片、架孔或背景圆形器械，先把工作杠片关联到运动者。可信肩／髋点只能排除远离运动者或躯干比例不合理的候选，不能替代杠铃点位。连续路径必须在准备、最低点、上升初段与锁定附近重新用真实轮毂／边缘候选锚定；短缺口可以用浅色线供阅读，但不得参与中足趋势、评分或训练方向。
+
 ## Timing and observations
 
 Compare hip and knee descent, bottom reversal, chest/hip rise, heel and whole-foot stability, depth relative to the chosen standard, brace, and bar position. A hip rise that briefly outpaces the shoulders during a hard ascent is evidence to interpret, not automatic proof of weak quadriceps.

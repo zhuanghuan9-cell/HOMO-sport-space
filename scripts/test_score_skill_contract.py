@@ -21,6 +21,12 @@ class ScoreSkillContractTests(unittest.TestCase):
         self.assertIn("总分组合（数字＋分）", document)
         self.assertIn("Page 4", document)
 
+    def test_squat_working_plate_association_contract_is_documented(self):
+        document = SKILL.read_text(encoding="utf-8")
+        self.assertIn("工作杠片", document)
+        self.assertIn("--pose-tracking", document)
+        self.assertIn("停放杠片", document)
+
 
 if __name__ == "__main__":
     unittest.main()

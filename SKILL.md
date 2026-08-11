@@ -44,12 +44,15 @@ python3 scripts/render_cards_v3.py ... --pose-tracking pose-tracking.json
 
 ```bash
 python3 scripts/track_barbell.py --video source.mp4 --frames-dir frames --phase-tracking tracking.json \
+  --pose-tracking pose-tracking.json \
   --output bar-tracking.json
 python3 scripts/compose_bar_tracking.py --tracking tracking.json \
   --bar-tracking bar-tracking.json --output report-safe.json
 ```
 
    Only `bar_tracking.status: "available"` may supply `raw_points` to `bar_path`, a bar-path conclusion, a path-related muscle direction, or a path-derived drill. Every key phase must be the same near-side plate hub. The tracker can make `display_points` for a short (≤4 sampled-frame) visual-only gap: these are explicitly marked `smoothed_gap`, never enter a metric or conclusion, and render as a lighter segment. If the tracker sees a missing critical phase, insufficient raw coverage, a plate-size jump, an abnormal frame-to-frame jump, a static/background circle, or ambiguity between plates, it emits `unavailable` with reasons. Render the composed `report-safe.json`; it preserves independent credible observations and pose visualisation, but says `当前视频无法可靠判断杠铃轨迹`, draws no old trace, and removes path-derived advice. Rear squat/deadlift and foot-end bench never run this single-hub tracker: they remain bilateral level/synchrony reviews.
+
+   **深蹲工作杠片关联。** 当侧面／斜侧面同时出现停放杠片、深蹲架孔位或背景圆形器械时，传入同源的 `--pose-tracking`。高置信度肩／髋点只用于建立“随运动者移动”的候选范围，绝不能生成或补猜杠铃坐标。追踪器只保留肩部附近、半径与相对位置合理的真实杠片边缘／轮毂候选，并在起始、最低点、上升初段、锁定附近重新用真实视觉候选锚定；旧版密集时间采样点不逐一作为门槛。每个原始点审计检测来源、相对肩部的归一化距离、相对连续性与关键阶段重锚状态。找不到工作杠片、跳到停放杠片／背景、关键阶段被遮挡或覆盖率不足时，必须拒绝轨迹。
 7. Save JSON using `references/tracking-schema.md`, then run:
 
 ```bash
